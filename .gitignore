@@ -1,0 +1,4 @@
+.spec-tdd/
+*.log
+/cc-fuse
+/cc-fuse.exe
