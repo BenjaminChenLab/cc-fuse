@@ -378,10 +378,16 @@ func decideFromA(in Input, budget BudgetState) Decision {
 func decideFromB(in Input, budget BudgetState) Decision {
 	if aRecovered(in) {
 		a := in.QuotaA
+		reason := fmt.Sprintf("A 已回落到安全區(5h %.1f%% ≤ %.1f", *a.FiveHourPct, in.Cfg.RecoveryThreshold5h)
+		if a.WeeklyPct != nil {
+			reason += fmt.Sprintf("、週 %.1f%% ≤ %.1f", *a.WeeklyPct, in.Cfg.RecoveryThresholdWeekly)
+		} else {
+			reason += "、無週窗口(不受週限)"
+		}
+		reason += ")→ 切回 A(RACING)"
 		return Decision{
 			Action: ActionSwitch, Target: "A", QuotaMode: modeFor("A"),
-			Reason: fmt.Sprintf("A 已回落到安全區(5h %.1f%% ≤ %.1f、週 %.1f%% ≤ %.1f)→ 切回 A(RACING)",
-				*a.FiveHourPct, in.Cfg.RecoveryThreshold5h, *a.WeeklyPct, in.Cfg.RecoveryThresholdWeekly),
+			Reason: reason,
 		}
 	}
 	b := in.QuotaB
@@ -407,12 +413,16 @@ func aHot(in Input) (bool, string) {
 	return false, ""
 }
 
-// aRecovered reports whether BOTH of A's windows are back at/below their
-// recovery lines (P4 hysteresis: switch at 90, return at 30/60 — no flapping).
+// aRecovered reports whether A is back in the safe zone: the 5h window at or
+// below its recovery line, plus the weekly window at/below its line WHEN that
+// window exists at all. A plan without a weekly bucket (WeeklyPct == nil,
+// field-tested 2026-11-15 on default GLM plans) has no weekly limit — the
+// weekly condition is then vacuously satisfied and recovery rides on 5h
+// alone (P4 hysteresis: switch at 90, return at 30/60 — no flapping).
 func aRecovered(in Input) bool {
 	a := in.QuotaA
 	return a.FiveHourPct != nil && *a.FiveHourPct <= in.Cfg.RecoveryThreshold5h &&
-		a.WeeklyPct != nil && *a.WeeklyPct <= in.Cfg.RecoveryThresholdWeekly
+		(a.WeeklyPct == nil || *a.WeeklyPct <= in.Cfg.RecoveryThresholdWeekly)
 }
 
 // bAvailable is the refuge definition: B's weekly% below today's ceiling
