@@ -18,10 +18,11 @@ const indexHTML = `<!doctype html>
  h2{color:#e4e4e7;user-select:none}
  fieldset{border:1px solid #3f3f46;border-radius:8px;margin-bottom:12px}
  legend{color:#a1a1aa;padding:0 6px}
- label{display:inline-block;min-width:150px;color:#d4d4d8}
+ label{display:inline-block;min-width:150px;color:#d4d4d8;cursor:help}
  input{background:#1c1c1f;color:#e4e4e7;border:1px solid #3f3f46;border-radius:6px;padding:4px 8px}
  input[type=text]{width:340px}
  input[type=number]{width:90px}
+ textarea{width:420px;min-height:120px;background:#1c1c1f;color:#e4e4e7;border:1px solid #3f3f46;border-radius:6px;padding:6px 8px;font-family:Consolas,monospace;font-size:12px;resize:vertical;vertical-align:top}
  button{padding:6px 16px;border-radius:8px;border:1px solid #3f3f46;background:#26262a;color:#e4e4e7;cursor:pointer}
  button.primary{background:#2563eb;border-color:#2563eb;color:#fff;font-weight:bold}
  button:disabled{opacity:.6;cursor:default}
@@ -51,45 +52,45 @@ const indexHTML = `<!doctype html>
 <h2>設定</h2>
 
 <fieldset><legend>供應商 A(共用帳號,永遠優先)</legend>
- <div><label>名稱</label><input type="text" id="aName"></div>
- <div><label>API key</label><input type="text" id="aKey"></div>
- <div><label>端點</label><input type="text" id="aURL"></div>
- <div><label>模型 env(JSON)</label><input type="text" id="aModel"></div>
+ <div><label title="顯示用的帳號名稱:切換卡片與系統匣會用到,可任意命名。">名稱</label><input type="text" id="aName" title="顯示用的帳號名稱:切換卡片與系統匣會用到,可任意命名。"></div>
+ <div><label title="z.ai 的 API 金鑰。身分判定以此為準:settings.json 裡的 key 屬於哪個帳號,就是靠比對這裡的 key。">API key</label><input type="text" id="aKey" title="z.ai 的 API 金鑰。身分判定以此為準:settings.json 裡的 key 屬於哪個帳號,就是靠比對這裡的 key。"></div>
+ <div><label title="切換時寫入 settings.json 的 ANTHROPIC_BASE_URL。z.ai 兩個帳號的端點通常相同。">端點</label><input type="text" id="aURL" title="切換時寫入 settings.json 的 ANTHROPIC_BASE_URL。z.ai 兩個帳號的端點通常相同。"></div>
+ <div><label title="額外寫入 env 的模型對應,JSON 格式(ANTHROPIC_DEFAULT_* 鍵值對)。API key 與端點不可放進這裡,匯入器會自動排除。">模型 env(JSON)</label><textarea id="aModel" rows="8" title="額外寫入 env 的模型對應,JSON 格式(ANTHROPIC_DEFAULT_* 鍵值對)。API key 與端點不可放進這裡,匯入器會自動排除。"></textarea></div>
 </fieldset>
 
 <fieldset><legend>供應商 B(自購帳號,避難所)</legend>
- <div><label>名稱</label><input type="text" id="bName"></div>
- <div><label>API key</label><input type="text" id="bKey"></div>
- <div><label>端點</label><input type="text" id="bURL"></div>
- <div><label>模型 env(JSON)</label><input type="text" id="bModel"></div>
+ <div><label title="顯示用的帳號名稱:切換卡片與系統匣會用到,可任意命名。">名稱</label><input type="text" id="bName" title="顯示用的帳號名稱:切換卡片與系統匣會用到,可任意命名。"></div>
+ <div><label title="z.ai 的 API 金鑰。身分判定以此為準:settings.json 裡的 key 屬於哪個帳號,就是靠比對這裡的 key。">API key</label><input type="text" id="bKey" title="z.ai 的 API 金鑰。身分判定以此為準:settings.json 裡的 key 屬於哪個帳號,就是靠比對這裡的 key。"></div>
+ <div><label title="切換時寫入 settings.json 的 ANTHROPIC_BASE_URL。z.ai 兩個帳號的端點通常相同。">端點</label><input type="text" id="bURL" title="切換時寫入 settings.json 的 ANTHROPIC_BASE_URL。z.ai 兩個帳號的端點通常相同。"></div>
+ <div><label title="額外寫入 env 的模型對應,JSON 格式(ANTHROPIC_DEFAULT_* 鍵值對)。API key 與端點不可放進這裡,匯入器會自動排除。">模型 env(JSON)</label><textarea id="bModel" rows="8" title="額外寫入 env 的模型對應,JSON 格式(ANTHROPIC_DEFAULT_* 鍵值對)。API key 與端點不可放進這裡,匯入器會自動排除。"></textarea></div>
 </fieldset>
 
 <fieldset><legend>閾值(%)</legend>
- <div><label>切換線 5h</label><input type="number" id="sw5" step="0.1"></div>
- <div><label>切換線 週</label><input type="number" id="swW" step="0.1"></div>
- <div><label>恢復線 5h</label><input type="number" id="rc5" step="0.1"></div>
- <div><label>恢復線 週</label><input type="number" id="rcW" step="0.1"></div>
- <div><label>預警線</label><input type="number" id="warn" step="0.1"></div>
- <div><label>資料過期(分)</label><input type="number" id="stale" step="1"></div>
- <div><label>連續解析失敗警報次數</label><input type="number" id="pf" step="1"></div>
+ <div><label title="在 A 時:5 小時窗口用量 ≥ 此值就切到 B(預設 90=搶在撞 429 牆之前先撤)。">切換線 5h</label><input type="number" id="sw5" step="0.1" title="在 A 時:5 小時窗口用量 ≥ 此值就切到 B(預設 90=搶在撞 429 牆之前先撤)。"></div>
+ <div><label title="在 A 時:週窗口用量 ≥ 此值同樣切到 B。">切換線 週</label><input type="number" id="swW" step="0.1" title="在 A 時:週窗口用量 ≥ 此值同樣切到 B。"></div>
+ <div><label title="在 B 時:A 的 5 小時用量降到 ≤ 此值才算恢復,自動切回 A。">恢復線 5h</label><input type="number" id="rc5" step="0.1" title="在 B 時:A 的 5 小時用量降到 ≤ 此值才算恢復,自動切回 A。"></div>
+ <div><label title="在 B 時:A 的週窗口 ≤ 此值(且 5 小時也達標)才切回 A。恢復線遠低於切換線,避免臨界點來回抖動。">恢復線 週</label><input type="number" id="rcW" step="0.1" title="在 B 時:A 的週窗口 ≤ 此值(且 5 小時也達標)才切回 A。恢復線遠低於切換線,避免臨界點來回抖動。"></div>
+ <div><label title="目前帳號任一窗口跨過此值時彈一次預警通知(每窗口只報一次,不洗版)。">預警線</label><input type="number" id="warn" step="0.1" title="目前帳號任一窗口跨過此值時彈一次預警通知(每窗口只報一次,不洗版)。"></div>
+ <div><label title="額度資料超過此分鐘數視同過期:不做任何自動切換、只通知一次。查詢暫時失敗時沿用上次數字,老化超過此限才認定過期。">資料過期(分)</label><input type="number" id="stale" step="1" title="額度資料超過此分鐘數視同過期:不做任何自動切換、只通知一次。查詢暫時失敗時沿用上次數字,老化超過此限才認定過期。"></div>
+ <div><label title="連續 N 次查詢/解析失敗 → 紅色圖示+通知(z.ai 回應可能改版,該更新程式)。0=停用警報。">連續解析失敗警報次數</label><input type="number" id="pf" step="1" title="連續 N 次查詢/解析失敗 → 紅色圖示+通知(z.ai 回應可能改版,該更新程式)。0=停用警報。"></div>
 </fieldset>
 
 <fieldset><legend>輪詢(秒)</legend>
- <div><label>一般間隔</label><input type="number" id="poll" step="1"></div>
- <div><label>快輪詢間隔</label><input type="number" id="fast" step="1"></div>
- <div><label>快輪詢觸發(%)</label><input type="number" id="fastAbove" step="0.1"></div>
+ <div><label title="平時多久查詢一次兩個帳號的額度。">一般間隔</label><input type="number" id="poll" step="1" title="平時多久查詢一次兩個帳號的額度。"></div>
+ <div><label title="目前帳號額度吃緊時,改用這個較快的輪詢間隔。">快輪詢間隔</label><input type="number" id="fast" step="1" title="目前帳號額度吃緊時,改用這個較快的輪詢間隔。"></div>
+ <div><label title="目前帳號任一窗口 > 此百分比就進入快輪詢(嚴格大於,剛好等於不算)。">快輪詢觸發(%)</label><input type="number" id="fastAbove" step="0.1" title="目前帳號任一窗口 > 此百分比就進入快輪詢(嚴格大於,剛好等於不算)。"></div>
 </fieldset>
 
 <fieldset><legend>B 配速預算</legend>
- <div><label>週預算總量(%)</label><input type="number" id="bWeekly" step="0.1"></div>
- <div><label>每日保底(%)</label><input type="number" id="bDaily" step="0.1"></div>
- <div><label>只數工作日</label><input type="checkbox" id="bWork"></div>
+ <div><label title="B 的週額度護欄:即使天天燒到當日天花板,整週用量也只會收斂到這個值(預設 90,真牆 100% 前留餘裕)。">週預算總量(%)</label><input type="number" id="bWeekly" step="0.1" title="B 的週額度護欄:即使天天燒到當日天花板,整週用量也只會收斂到這個值(預設 90,真牆 100% 前留餘裕)。"></div>
+ <div><label title="每天至少分配這個額度百分比(剩餘天數平均算出來更少時用它墊底)。設 0=嚴格平均,不保底。">每日保底(%)</label><input type="number" id="bDaily" step="0.1" title="每天至少分配這個額度百分比(剩餘天數平均算出來更少時用它墊底)。設 0=嚴格平均,不保底。"></div>
+ <div><label title="勾選:剩餘天數只數工作日,週末不佔每日額度;不勾:每天額度=剩餘÷日曆天數。">只數工作日</label><input type="checkbox" id="bWork" title="勾選:剩餘天數只數工作日,週末不佔每日額度;不勾:每天額度=剩餘÷日曆天數。"></div>
 </fieldset>
 
 <fieldset><legend>其他</legend>
- <div><label>quota-mode.md 路徑</label><input type="text" id="qm"></div>
- <div><label>proxy(空=直連)</label><input type="text" id="proxy"></div>
- <div><label>開機自動啟動</label><input type="checkbox" id="auto"></div>
+ <div><label title="切換時翻轉此檔的 mode: 行(RACING/SAVING),給其他 Claude session 讀取的搶速/省錢訊號。檔案不存在只跳過,不影響切換。">quota-mode.md 路徑</label><input type="text" id="qm" title="切換時翻轉此檔的 mode: 行(RACING/SAVING),給其他 Claude session 讀取的搶速/省錢訊號。檔案不存在只跳過,不影響切換。"></div>
+ <div><label title="查詢額度 API 用的 HTTP proxy 網址;留空=直連。">proxy(空=直連)</label><input type="text" id="proxy" title="查詢額度 API 用的 HTTP proxy 網址;留空=直連。"></div>
+ <div><label title="存檔時立即寫入/移除登錄檔 Run 機碼:開機自動啟動 cc-fuse。">開機自動啟動</label><input type="checkbox" id="auto" title="存檔時立即寫入/移除登錄檔 Run 機碼:開機自動啟動 cc-fuse。"></div>
 </fieldset>
 
 <button id="save">存檔</button><span id="msg"></span>
@@ -108,7 +109,7 @@ function fill(p,pre){
  document.getElementById(pre+"Name").value=p.name||"";
  document.getElementById(pre+"Key").value=p.apiKey||"";
  document.getElementById(pre+"URL").value=p.baseUrl||"";
- document.getElementById(pre+"Model").value=p.modelEnv?JSON.stringify(p.modelEnv):"";
+ document.getElementById(pre+"Model").value=(p.modelEnv&&Object.keys(p.modelEnv).length)?JSON.stringify(p.modelEnv,null,2):"";
 }
 function initials(n){n=(n||"").trim();if(!n)return"?";var w=n.split(/\s+/);var s=w.length>1?(w[0][0]+w[1][0]):n.slice(0,2);return s.toUpperCase()}
 function fmtCD(ms){if(ms==null||ms<=0)return"";var m=Math.round(ms/60000);if(m<1)return"<1m";if(m<60)return m+"m";var h=Math.floor(m/60);if(h<48)return h+"h"+(m%60?(""+(m%60)+"m"):"");var d=Math.floor(h/24);return d+"d"+(h%24)+"h"}
