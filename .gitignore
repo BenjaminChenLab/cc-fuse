@@ -2,3 +2,4 @@
 *.log
 /cc-fuse
 /cc-fuse.exe
+*.exe~
