@@ -1,54 +1,70 @@
 package ui
 
 // indexHTML is the settings window page served at / (design §8: 內嵌本機頁).
-// Plain HTML + JS, no external assets. Top half = switcher cards (cc-switch
-// style: name/URL/5h/7d quota + reset countdown, active card highlighted,
-// one-click switch); bottom half = every configurable number (CLAUDE.md:
-// 所有數字一律可設定). The quota numbers come from GET /api/status and
-// refresh every 5s; switching posts /api/switch (P1 manual, immediate).
-// Candidate names/keys come from the cc-switch database (external data), so
-// every dynamic string is built via DOM textContent — never innerHTML.
+// Dark refined theme (2026-11-17): design tokens, card layout with quota
+// progress bars, toggle switches, focus rings — modern-product look while
+// every dynamic string is still built via DOM textContent (never innerHTML).
+// The quota numbers come from GET /api/status and refresh every 5s;
+// switching posts /api/switch (P1 manual, immediate). Candidate names/keys
+// come from the cc-switch database (external data).
 const indexHTML = `<!doctype html>
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
 <title>cc-fuse 設定</title>
 <style>
- body{background:#101012;color:#e4e4e7;font-family:"Microsoft JhengHei",sans-serif;font-size:16px;margin:16px;max-width:720px}
- h2{color:#e4e4e7;user-select:none;font-size:20px}
- fieldset{border:1px solid #3f3f46;border-radius:8px;margin-bottom:12px}
- legend{color:#a1a1aa;padding:0 6px}
- label{display:inline-block;min-width:150px;color:#d4d4d8;cursor:help}
- input{background:#1c1c1f;color:#e4e4e7;border:1px solid #3f3f46;border-radius:6px;padding:4px 8px}
+:root{--bg:#0c0d10;--card:#16171c;--card2:#1c1e24;--border:#26272e;--border2:#3a3c46;--text:#e8e8ec;--muted:#9a9aa5;--accent:#3b82f6;--accent2:#2563eb;--ok:#34d399;--warn:#f59e0b;--bad:#f87171}
+ body{background:radial-gradient(1100px 500px at 85% -10%,#131722 0%,var(--bg) 55%);color:var(--text);font-family:"Segoe UI","Microsoft JhengHei",sans-serif;font-size:16px;margin:20px auto;max-width:940px}
+ h2{font-size:16px;letter-spacing:2px;font-weight:600;color:var(--muted);margin:26px 0 12px;user-select:none}
+ fieldset{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px 18px;margin-bottom:14px}
+ legend{color:var(--accent);font-weight:600;font-size:14px;padding:0 8px}
+ label{display:inline-block;min-width:170px;color:var(--text);cursor:help}
+ input{background:var(--card2);color:var(--text);border:1px solid var(--border2);border-radius:8px;padding:7px 10px;font-size:15px}
+ input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.18)}
  input[type=text]{width:340px}
- input[type=number]{width:90px}
- textarea{width:420px;min-height:120px;background:#1c1c1f;color:#e4e4e7;border:1px solid #3f3f46;border-radius:6px;padding:6px 8px;font-family:Consolas,monospace;font-size:12px;resize:vertical;vertical-align:top}
- button{padding:6px 16px;border-radius:8px;border:1px solid #3f3f46;background:#26262a;color:#e4e4e7;cursor:pointer}
- button.primary{background:#2563eb;border-color:#2563eb;color:#fff;font-weight:bold}
- button:disabled{opacity:.6;cursor:default}
- .card{display:flex;align-items:center;gap:12px;border:1px solid #3f3f46;border-radius:12px;padding:12px 16px;margin-bottom:10px;background:#18181b}
- .card.active{border-color:#2563eb}
- .av{width:44px;height:44px;border-radius:50%;background:#26262a;display:flex;align-items:center;justify-content:center;font-weight:bold;color:#a1a1aa;flex:none}
+ input[type=number]{width:96px}
+ textarea{width:480px;min-height:120px;background:var(--card2);color:var(--text);border:1px solid var(--border2);border-radius:8px;padding:8px 10px;font-family:Consolas,monospace;font-size:13px;resize:vertical;vertical-align:top}
+ textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.18)}
+ button{padding:8px 18px;border-radius:10px;border:1px solid var(--border2);background:var(--card2);color:var(--text);cursor:pointer;font-size:15px;transition:.15s}
+ button:hover{border-color:var(--accent);color:#fff}
+ button.primary{background:var(--accent2);border-color:var(--accent2);color:#fff;font-weight:600}
+ button.primary:hover{background:var(--accent)}
+ button:disabled{opacity:.5;cursor:default}
+ .card{display:flex;align-items:center;gap:14px;border:1px solid var(--border);border-radius:14px;padding:14px 18px;margin-bottom:10px;background:var(--card);transition:.15s}
+ .card:hover{border-color:var(--border2)}
+ .card.active{border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.12)}
+ .av{width:46px;height:46px;border-radius:14px;background:linear-gradient(135deg,#23252d,#2e3138);display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--muted);flex:none;font-size:17px}
  .meta{flex:1;min-width:0}
- .name{font-size:18px;font-weight:bold}
- .url{color:#7dd3fc;font-size:14px;word-break:break-all;margin:2px 0}
- .quota{display:flex;gap:16px;color:#d4d4d8;font-size:15px}
- .quota b{font-weight:bold}
- .slot{font-size:12px;color:#d4d4d8;border:1px solid #3f3f46;border-radius:4px;padding:0 5px;margin-left:8px;vertical-align:middle;font-weight:normal}
- .good{color:#4ade80}.warn{color:#fb923c}.bad{color:#f87171}
- .cd{color:#d4d4d8;font-size:14px}
- .bar{margin:8px 0 16px;color:#a1a1aa}
- #msg{margin-left:8px;color:#4ade80}
- #imp{margin-left:8px;color:#7dd3fc;white-space:pre-wrap}
- #cands div{margin:4px 0}
- #cands span{margin-right:10px}
+ .name{font-size:18px;font-weight:700;display:flex;align-items:center;gap:8px}
+ .url{color:#6ea8ff;font-size:13px;word-break:break-all;margin:2px 0 8px}
+ .qrow{display:flex;align-items:center;gap:10px;margin:3px 0}
+ .qlabel{width:28px;color:var(--muted);font-size:13px;flex:none}
+ .qtrack{flex:1;height:8px;background:var(--border);border-radius:999px;overflow:hidden}
+ .qfill{height:100%;border-radius:999px;background:var(--ok);transition:width .4s}
+ .qfill.warn{background:var(--warn)}.qfill.bad{background:var(--bad)}
+ .qval{width:54px;text-align:right;font-weight:600;font-size:15px;flex:none}
+ .chip{display:inline-flex;align-items:center;background:var(--card2);border:1px solid var(--border);border-radius:999px;padding:3px 12px;font-size:14px;color:var(--text);margin:8px 8px 0 0}
+ .slot{font-size:11px;color:var(--muted);border:1px solid var(--border2);border-radius:999px;padding:1px 8px;font-weight:600;letter-spacing:1px}
+ .good{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+ .cd{color:var(--muted);font-size:13px;margin-left:4px}
+ .bar{display:flex;align-items:center;gap:10px;margin:14px 0;color:var(--muted);font-size:14px;flex-wrap:wrap}
+ .grow{flex:1}
+ .switch{position:relative;display:inline-block;width:42px;height:22px;vertical-align:middle}
+ .switch input{appearance:none;-webkit-appearance:none;position:absolute;inset:0;width:100%;height:100%;margin:0;cursor:pointer;opacity:0}
+ .switch i{position:absolute;inset:0;background:#2a2b31;border-radius:999px;transition:.2s;pointer-events:none;border:1px solid var(--border2)}
+ .switch i:before{content:"";position:absolute;width:16px;height:16px;left:3px;top:2px;background:var(--muted);border-radius:50%;transition:.2s}
+ .switch input:checked + i{background:var(--accent2);border-color:var(--accent)}
+ .switch input:checked + i:before{transform:translateX(19px);background:#fff}
+ #msg{color:var(--ok)} #imp{color:#6ea8ff;white-space:pre-wrap}
+ #cands div{margin:6px 0}
+ #cands span{margin-right:12px;color:var(--muted)}
 </style>
 </head>
 <body>
 <h2>切換</h2>
-<div id="cards"><div class="quota">載入中…</div></div>
-<div class="bar"><span id="hint"></span> <button id="apToggle" style="margin-left:12px"></button> <button id="refresh" style="margin-left:12px">重新整理</button></div>
-<hr>
+<div id="cards" style="color:var(--muted)">載入中…</div>
+<div class="bar"><span id="hint"></span><span class="grow"></span><button id="apToggle"></button><button id="refresh">重新整理</button></div>
+<hr style="border:none;border-top:1px solid var(--border);margin:22px 0">
 <h2>設定</h2>
 
 <fieldset><legend>供應商 A(共用帳號,永遠優先)</legend>
@@ -82,21 +98,21 @@ const indexHTML = `<!doctype html>
 </fieldset>
 
 <fieldset><legend>B 配速預算</legend>
- <div><label title="勾選:B 燒到當日天花板時強制切回 A(寧停等不超支),燒過線的 B 也不當避難所(A 過熱時留 A 等下次結算);不勾:B 的當日天花板只顯示與記帳,完全不影響自動切換。">天花板強制切回 A</label><input type="checkbox" id="bEnforce" title="勾選:B 燒到當日天花板時強制切回 A(寧停等不超支),燒過線的 B 也不當避難所(A 過熱時留 A 等下次結算);不勾:B 的當日天花板只顯示與記帳,完全不影響自動切換。"></div>
+ <div><label title="勾選:B 燒到當日天花板時強制切回 A(寧停等不超支),燒過線的 B 也不當避難所(A 過熱時留 A 等下次結算);不勾:B 的當日天花板只顯示與記帳,完全不影響自動切換。">天花板強制切回 A</label><span class="switch"><input type="checkbox" id="bEnforce" title="勾選:B 燒到當日天花板時強制切回 A(寧停等不超支),燒過線的 B 也不當避難所(A 過熱時留 A 等下次結算);不勾:B 的當日天花板只顯示與記帳,完全不影響自動切換。"><i></i></span></div>
  <div><label title="B 的週額度護欄:即使天天燒到當日天花板,整週用量也只會收斂到這個值(預設 90,真牆 100% 前留餘裕)。">週預算總量(%)</label><input type="number" id="bWeekly" step="0.1" title="B 的週額度護欄:即使天天燒到當日天花板,整週用量也只會收斂到這個值(預設 90,真牆 100% 前留餘裕)。"></div>
  <div><label title="每天至少分配這個額度百分比(剩餘天數平均算出來更少時用它墊底)。設 0=嚴格平均,不保底。">每日保底(%)</label><input type="number" id="bDaily" step="0.1" title="每天至少分配這個額度百分比(剩餘天數平均算出來更少時用它墊底)。設 0=嚴格平均,不保底。"></div>
- <div><label title="勾選:剩餘天數只數工作日,週末不佔每日額度;不勾:每天額度=剩餘÷日曆天數。">只數工作日</label><input type="checkbox" id="bWork" title="勾選:剩餘天數只數工作日,週末不佔每日額度;不勾:每天額度=剩餘÷日曆天數。"></div>
+ <div><label title="勾選:剩餘天數只數工作日,週末不佔每日額度;不勾:每天額度=剩餘÷日曆天數。">只數工作日</label><span class="switch"><input type="checkbox" id="bWork" title="勾選:剩餘天數只數工作日,週末不佔每日額度;不勾:每天額度=剩餘÷日曆天數。"><i></i></span></div>
 </fieldset>
 
 <fieldset><legend>其他</legend>
  <div><label title="切換時翻轉此檔的 mode: 行(RACING/SAVING),給其他 Claude session 讀取的搶速/省錢訊號。檔案不存在只跳過,不影響切換。">quota-mode.md 路徑</label><input type="text" id="qm" title="切換時翻轉此檔的 mode: 行(RACING/SAVING),給其他 Claude session 讀取的搶速/省錢訊號。檔案不存在只跳過,不影響切換。"></div>
  <div><label title="查詢額度 API 用的 HTTP proxy 網址;留空=直連。">proxy(空=直連)</label><input type="text" id="proxy" title="查詢額度 API 用的 HTTP proxy 網址;留空=直連。"></div>
- <div><label title="存檔時立即寫入/移除登錄檔 Run 機碼:開機自動啟動 cc-fuse。">開機自動啟動</label><input type="checkbox" id="auto" title="存檔時立即寫入/移除登錄檔 Run 機碼:開機自動啟動 cc-fuse。"></div>
+ <div><label title="存檔時立即寫入/移除登錄檔 Run 機碼:開機自動啟動 cc-fuse。">開機自動啟動</label><span class="switch"><input type="checkbox" id="auto" title="存檔時立即寫入/移除登錄檔 Run 機碼:開機自動啟動 cc-fuse。"><i></i></span></div>
 </fieldset>
 
-<button id="save">存檔</button><span id="msg"></span>
-<hr>
-<div><label>cc-switch 資料庫路徑</label><input type="text" id="dbPath" value="~/.cc-switch/cc-switch.db"></div>
+<button id="save" class="primary">存檔</button><span id="msg"></span>
+<hr style="border:none;border-top:1px solid var(--border);margin:22px 0">
+<div style="margin-bottom:8px"><label>cc-switch 資料庫路徑</label><input type="text" id="dbPath" value="~/.cc-switch/cc-switch.db"></div>
 <button id="import">從 cc-switch 匯入</button><span id="imp"></span>
 <div id="cands"></div>
 
@@ -125,15 +141,20 @@ function api(method,url,body,cb){
 }
 
 // ---- 切換卡片(資料全來自 /api/status;外部字串一律 DOM textContent 建) ----
-function quotaCell(label,pct,reset){
- var d=document.createElement("span");
- var b=document.createElement("b");
- b.textContent=(pct==null?"—":pct+"%");
- b.className=pctCls(pct);
- d.appendChild(document.createTextNode(label+" "));
- d.appendChild(b);
- if(reset){var c=document.createElement("span");c.className="cd";var ms=Date.parse(reset)-Date.now();if(ms>0)c.textContent=" ⏱"+fmtCD(ms);d.appendChild(c)}
- return d;
+function quotaBar(label,pct,reset){
+ var row=document.createElement("div");row.className="qrow";
+ var lab=document.createElement("span");lab.className="qlabel";lab.textContent=label;row.appendChild(lab);
+ var track=document.createElement("div");track.className="qtrack";
+ var fillEl=document.createElement("div");
+ var v=(pct==null?0:Math.max(0,Math.min(100,pct)));
+ fillEl.style.width=v+"%";
+ var cls=pctCls(pct);
+ fillEl.className=cls?("qfill "+cls):"qfill";
+ track.appendChild(fillEl);row.appendChild(track);
+ var valEl=document.createElement("span");valEl.className="qval"+(cls?" "+cls:"");
+ valEl.textContent=(pct==null?"—":pct+"%");row.appendChild(valEl);
+ if(reset){var c=document.createElement("span");c.className="cd";var ms=Date.parse(reset)-Date.now();if(ms>0)c.textContent="⏱"+fmtCD(ms);row.appendChild(c)}
+ return row;
 }
 function buildCard(slot,p,snap,s){
  var row=document.createElement("div");
@@ -147,23 +168,21 @@ function buildCard(slot,p,snap,s){
  meta.appendChild(nm);
  var ur=document.createElement("div");ur.className="url";ur.textContent=(p&&p.baseUrl)?p.baseUrl:"";
  meta.appendChild(ur);
- var q=document.createElement("div");q.className="quota";
- q.appendChild(quotaCell("5h",snap?snap.fiveHourPct:null,snap?snap.fiveHourReset:null));
- q.appendChild(quotaCell("7d",snap?snap.weeklyPct:null,snap?snap.weeklyReset:null));
- meta.appendChild(q);
+ meta.appendChild(quotaBar("5h",snap?snap.fiveHourPct:null,snap?snap.fiveHourReset:null));
+ meta.appendChild(quotaBar("7d",snap?snap.weeklyPct:null,snap?snap.weeklyReset:null));
  // B 卡:今日天花板(R1)——開=到點強制切回 A、關=不強制;未結算過則整行不建。
  if(slot==="B"&&s.ceilingToday!=null){
   var note=s.enforceDailyCeiling?"到點強制切回 A":"不強制";
-  var cl=document.createElement("div");cl.className="cd";
-  cl.textContent="今日天花板 週"+s.ceilingToday.toFixed(1)+"%("+note+")";
-  meta.appendChild(cl);
+  var chip=document.createElement("span");chip.className="chip";
+  chip.textContent="今日天花板 週"+s.ceilingToday.toFixed(1)+"%("+note+")";
+  meta.appendChild(chip);
  }
  // A 卡:恢復預計(R3,只看 5h 重置;週窗口也超標時此估計偏樂觀,使用者已知悉)。
  if(slot==="A"&&snap&&snap.fiveHourReset){
   var hh=new Date(snap.fiveHourReset),ms=hh-Date.now();
-  var rl=document.createElement("div");rl.className="cd";
-  rl.textContent="恢復預計 "+hh.toLocaleTimeString("zh-TW",{hour:"2-digit",minute:"2-digit",hour12:false})+(ms>0?"(⏱"+fmtCD(ms)+")":"");
-  meta.appendChild(rl);
+  var chip2=document.createElement("span");chip2.className="chip";
+  chip2.textContent="恢復預計 "+hh.toLocaleTimeString("zh-TW",{hour:"2-digit",minute:"2-digit",hour12:false})+(ms>0?"(⏱"+fmtCD(ms)+")":"");
+  meta.appendChild(chip2);
  }
  row.appendChild(meta);
  var btn=document.createElement("button");

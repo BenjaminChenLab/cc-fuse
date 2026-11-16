@@ -234,8 +234,8 @@ func openWebView(logger *log.Logger, url string, onClosed func(), onReady func(u
 		w := webview2.NewWithOptions(webview2.WebViewOptions{
 			WindowOptions: webview2.WindowOptions{
 				Title:  settingsWindowName,
-				Width:  760,
-				Height: 820,
+				Width:  1000,
+				Height: 860,
 			},
 		})
 		if w == nil {
