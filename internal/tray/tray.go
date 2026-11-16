@@ -17,25 +17,40 @@ import (
 // IconState is one of the tray icon's four colors (design §8).
 type IconState int
 
-// The icon states: green while on the shared team account, orange while on
-// the personal refuge, gray when paused or the data ran stale, red when the
-// current key is dead or quota parsing has failed past the alert limit.
+// The icon states: solid green/orange while auto-switching on the shared/
+// personal account, a hollow ring in the account's color while paused (shape
+// carries the paused meaning, color keeps "who am I on" — 2026-11-17
+// Benjamin's pick), gray when the data ran stale or the state is unknown,
+// red when the current key is dead or quota parsing has failed past the
+// alert limit.
 const (
-	IconGreenA  IconState = iota // 綠=使用 A
-	IconOrangeB                  // 橘=使用 B
-	IconGray                     // 灰=暫停自動或資料過期
+	IconGreenA  IconState = iota // 綠實心=自動切換中,使用 A
+	IconOrangeB                  // 橘實心=自動切換中,使用 B
+	IconGray                     // 灰實心=資料過期或無法判定
 	IconRed                      // 紅=金鑰失效或連續解析失敗
+	IconHollowA                  // 綠空心環=暫停自動,使用 A
+	IconHollowB                  // 橘空心環=暫停自動,使用 B
 )
 
-// PickIcon resolves the render state by severity: red beats gray beats the
-// account colors — a dead key or parse-drift alert must stay visible even
-// while data is also stale, and a paused app keeps gray regardless of which
-// profile the file points at.
+// PickIcon resolves the render state by severity: red beats the paused
+// hollow ring beats stale gray beats the solid account colors — a dead key
+// or parse-drift alert must stay visible in every other state; while paused
+// the ring keeps the account color (stale data matters less when nothing
+// switches automatically); a paused app with an unknown current account
+// stays conservatively gray.
 func PickIcon(st app.Status) IconState {
 	switch {
 	case st.KeyDead || st.ParseFailing:
 		return IconRed
-	case !st.Autopilot || st.Stale:
+	case !st.Autopilot:
+		if st.Current == "B" {
+			return IconHollowB
+		}
+		if st.Current == "A" {
+			return IconHollowA
+		}
+		return IconGray // 暫停但無法判定目前在誰身上:保守顯示灰
+	case st.Stale:
 		return IconGray
 	case st.Current == "A":
 		return IconGreenA

@@ -18,7 +18,8 @@ func sample(pct5 float64) *domain.QuotaSnapshot {
 	return &domain.QuotaSnapshot{ProfileID: "x", FiveHourPct: f(pct5), QueriedAt: time.Now()}
 }
 
-// TestPickIconSeverity:紅 > 灰 > 帳號色,未知 Current 保守灰。
+// TestPickIconSeverity:紅 > 暫停空心環(保留帳號色) > 過期灰 > 帳號實心,
+// 未知 Current 保守灰。
 func TestPickIconSeverity(t *testing.T) {
 	cases := []struct {
 		name string
@@ -27,7 +28,10 @@ func TestPickIconSeverity(t *testing.T) {
 	}{
 		{"on A", app.Status{Current: "A", Autopilot: true}, IconGreenA},
 		{"on B", app.Status{Current: "B", Autopilot: true}, IconOrangeB},
-		{"paused", app.Status{Current: "A", Autopilot: false}, IconGray},
+		{"paused on A is hollow green", app.Status{Current: "A", Autopilot: false}, IconHollowA},
+		{"paused on B is hollow orange", app.Status{Current: "B", Autopilot: false}, IconHollowB},
+		{"paused beats stale", app.Status{Current: "A", Autopilot: false, Stale: true}, IconHollowA},
+		{"paused with unknown current stays gray", app.Status{Autopilot: false}, IconGray},
 		{"stale", app.Status{Current: "A", Autopilot: true, Stale: true}, IconGray},
 		{"key dead wins over paused", app.Status{Current: "A", Autopilot: false, KeyDead: true}, IconRed},
 		{"parse failing red", app.Status{Current: "B", Autopilot: true, ParseFailing: true}, IconRed},
@@ -67,9 +71,9 @@ func TestStatusText(t *testing.T) {
 	}
 }
 
-// TestIconBytes:四種狀態都能產出合法 ICO(目錄頭+PNG 資料),同狀態位元組一致。
+// TestIconBytes:六種狀態都能產出合法 ICO(目錄頭+PNG 資料),同狀態位元組一致。
 func TestIconBytes(t *testing.T) {
-	for s := IconGreenA; s <= IconRed; s++ {
+	for s := IconGreenA; s <= IconHollowB; s++ {
 		b, err := IconBytes(s)
 		if err != nil {
 			t.Fatalf("IconBytes(%d): %v", s, err)
@@ -81,5 +85,30 @@ func TestIconBytes(t *testing.T) {
 		if string(b) != string(b2) {
 			t.Fatalf("IconBytes(%d) not deterministic", s)
 		}
+	}
+}
+
+// TestDrawRingHollow:空心環的中心必須透明、外圈有色 — 空心與實心可由像素辨別
+// (Phase-3 紀律:斷言要有鑑別力,回歸成實心點時此測試必炸)。
+func TestDrawRingHollow(t *testing.T) {
+	fill := stateColors[IconHollowA][0]
+	ring := stateColors[IconHollowA][1]
+	img := drawRing(fill, ring)
+
+	// 中心(半徑 < 8)透明。
+	if _, _, _, a := img.At(16, 16).RGBA(); a != 0 {
+		t.Fatalf("空心環中心必須透明,alpha=%d", a)
+	}
+	// 填充帶(半徑 8–11,取點 (16,8) 對中心距離 ≈7.5… 實際取 (16,7):dy≈8.5 → 帶內)。
+	if got := img.At(16, 7); got != fill {
+		t.Fatalf("環帶應為帳號填充色,got %v want %v", got, fill)
+	}
+	// 外圈(半徑 11–13,取點 (16,4):dy≈11.5)。
+	if got := img.At(16, 4); got != ring {
+		t.Fatalf("環外圈應為描邊色,got %v want %v", got, ring)
+	}
+	// 環外(半徑 > 13,取點 (16,0))透明。
+	if _, _, _, a := img.At(16, 0).RGBA(); a != 0 {
+		t.Fatalf("環外必須透明")
 	}
 }
