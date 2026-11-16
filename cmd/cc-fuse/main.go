@@ -19,6 +19,7 @@ import (
 	"cc-fuse/internal/quotamode"
 	"cc-fuse/internal/switcher"
 	"cc-fuse/internal/tray"
+	"cc-fuse/internal/version"
 )
 
 // quotaQueryTimeout is the per-request z.ai quota HTTP timeout (T01: 15s).
@@ -99,8 +100,8 @@ func main() {
 		}()
 		loop.Run(ctx)
 	}()
-	logger.Printf("cc-fuse 啟動(A=%s B=%s settings=%s)",
-		profileSummary(profiles, "A"), profileSummary(profiles, "B"), loop.SettingsPath)
+	logger.Printf("cc-fuse v%s 啟動(A=%s B=%s settings=%s)",
+		version.Version, profileSummary(profiles, "A"), profileSummary(profiles, "B"), loop.SettingsPath)
 	tray.Run(ctx, tray.Handles{
 		Loop:         loop,
 		OpenSettings: openSettings,
