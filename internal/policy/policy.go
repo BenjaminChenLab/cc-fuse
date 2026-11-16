@@ -89,7 +89,11 @@ type Input struct {
 // Decision is one round's outcome. Action/Target/Reason/QuotaMode drive the
 // switcher and the notifier; Budget, when non-nil, is the state the caller
 // must persist (a settlement and/or a P7 flag change); Stale suspends
-// decisions; WarnFired asks for the one-shot warning toast.
+// decisions; WarnFired asks for the one-shot warning toast. Settled marks
+// that THIS round actually ran a §7 settlement (not merely a warn-latch
+// carry) — the app clears its budget-recompute latch only on settled rounds
+// (a settlement is the authoritative envelope; a warn-only copy may be stale
+// and must not end the self-heal retry).
 type Decision struct {
 	Action    Action       // Stay | SwitchTo(Target) | Pause | None
 	Target    string       // "A"/"B" when Action == ActionSwitch
@@ -98,6 +102,7 @@ type Decision struct {
 	Budget    *BudgetState // non-nil = persist this budget state
 	Stale     bool         // data too old/missing → caller suspends deciding
 	WarnFired bool         // P7 one-shot warning for the current account
+	Settled   bool         // a §7 settlement ran this round (Budget is authoritative)
 }
 
 // Evaluate decides one round. Priority follows design §6 numbering with the
@@ -129,16 +134,19 @@ func Evaluate(in Input) Decision {
 	budget := in.Budget
 	var budgetOut *BudgetState
 	settleSkipped := false
+	settled := false
 	if settlementDue(in) {
 		if nb, ok := settleBudget(in); ok {
 			budget = nb
 			budgetOut = &budget
+			settled = true
 		} else {
 			settleSkipped = true
 		}
 	}
 	// P3–P6:動作決策;P7:預警旗標(僅疊在非切換輪)。
 	d := decideAction(in, budget)
+	d.Settled = settled
 	budgetOut = applyWarn(in, budget, budgetOut, &d)
 	if budgetOut != nil {
 		d.Budget = budgetOut
@@ -345,6 +353,60 @@ func atClock(t time.Time, ref time.Time) time.Time {
 		ref.Hour(), ref.Minute(), ref.Second(), ref.Nanosecond(), t.Location())
 }
 
+// RefreshBudget recomputes TODAY's ceiling immediately after the budget
+// settings were saved (2026-11-16 plan R4) instead of waiting for the next
+// daily settlement. Returns (state, ok); ok=false means "not computable now"
+// — the caller keeps the incoming state untouched and should retry later
+// (the app latches budgetDirty). Two paths, per the folded §2.4:
+//
+//   - Cold start (DayStartWeekly nil — no settlement yet today): requires the
+//     B snapshot present, carrying a weekly%, and FRESH — QueriedAt within
+//     StaleAfterMin, the same gate the engine itself applies before deciding
+//     (user decision 2026-11-16 Q2: a stale number must never anchor the
+//     whole day's baseline). Fresh → a full settleBudget envelope.
+//   - Recompute (a day-start baseline exists): days counted from the CURRENT
+//     budget day's start, ref = DayBoundary−24h (settlement always sets
+//     DayBoundary; with an anchor its clock time equals the weekly-reset
+//     clock — the 15:00→15:00 semantics — while an anchorless blind chain
+//     falls back to midnight; ref reproduces whatever the settlement used).
+//     DayBoundary is fixed within a budget day, so the same config saved at
+//     any moment of the day yields the identical ceiling — the C7 midnight
+//     drift is dead, and the recompute never relaxes the settled ceiling.
+//     The formula reads only the persisted baseline + config + anchor; no B
+//     snapshot needed. Only CeilingToday changes — baseline, boundary, anchor
+//     and the warn latch all stay (日中不放寬).
+//
+// Guard: a hand-edited state.json can produce baseline-without-boundary
+// (normal writers always set both; re-audit K1(d)) — treated as not
+// computable rather than guessing a ref.
+func RefreshBudget(in Input) (BudgetState, bool) {
+	b := in.Budget
+	if b.DayStartWeekly == nil {
+		q := in.QuotaB
+		stale := q == nil || q.WeeklyPct == nil || q.QueriedAt.IsZero() ||
+			in.Now.Sub(q.QueriedAt) > time.Duration(in.Cfg.StaleAfterMin)*time.Minute
+		if stale {
+			return b, false
+		}
+		return settleBudget(in)
+	}
+	if b.DayBoundary == nil {
+		return b, false
+	}
+	ref := b.DayBoundary.Add(-24 * time.Hour)
+	days := daysLeftInWindow(ref, b.WeekAnchorTime, in.Cfg.Budget.WorkdaysOnly)
+	allowance := (in.Cfg.Budget.WeeklyTotalPct - *b.DayStartWeekly) / float64(days)
+	if allowance < in.Cfg.Budget.MinDailyAllowancePct {
+		allowance = in.Cfg.Budget.MinDailyAllowancePct
+	}
+	ceiling := *b.DayStartWeekly + allowance
+	if ceiling > hardWallPct {
+		ceiling = hardWallPct
+	}
+	b.CeilingToday = &ceiling
+	return b, true
+}
+
 // decideAction applies the switching rules P3–P6 for the current account.
 func decideAction(in Input, budget BudgetState) Decision {
 	switch in.Current {
@@ -374,7 +436,9 @@ func decideFromA(in Input, budget BudgetState) Decision {
 
 // decideFromB: P4 return once A is back in the safe zone (both windows,
 // inclusive), else P5 strict budget guard: B at today's ceiling returns to A
-// even when A has not recovered — 寧停等不超支.
+// even when A has not recovered — 寧停等不超支. P5 applies only while
+// cfg.Budget.EnforceDailyCeiling is on (2026-11-16 plan R2: toggle off =
+// the ceiling never affects switching; B simply stays).
 func decideFromB(in Input, budget BudgetState) Decision {
 	if aRecovered(in) {
 		a := in.QuotaA
@@ -391,7 +455,8 @@ func decideFromB(in Input, budget BudgetState) Decision {
 		}
 	}
 	b := in.QuotaB
-	if budget.CeilingToday != nil && b.WeeklyPct != nil && *b.WeeklyPct >= *budget.CeilingToday {
+	if in.Cfg.Budget.EnforceDailyCeiling &&
+		budget.CeilingToday != nil && b.WeeklyPct != nil && *b.WeeklyPct >= *budget.CeilingToday {
 		return Decision{
 			Action: ActionSwitch, Target: "A", QuotaMode: modeFor("A"),
 			Reason: fmt.Sprintf("B 今日額度用完(週 %.1f%% ≥ 天花板 %.1f%%),寧停等不超支 → 切回 A", *b.WeeklyPct, *budget.CeilingToday),
@@ -427,12 +492,15 @@ func aRecovered(in Input) bool {
 
 // bAvailable is the refuge definition: B's weekly% below today's ceiling
 // (unknown ceiling counts as available) AND B's 5h% below the switch line.
+// The ceiling term applies only while budget enforcement is on (plan R2) —
+// with the toggle off, an over-ceiling B still serves as a refuge.
 func bAvailable(in Input, budget BudgetState) bool {
 	b := in.QuotaB
 	if b.FiveHourPct != nil && *b.FiveHourPct >= in.Cfg.SwitchThreshold5h {
 		return false
 	}
-	if budget.CeilingToday != nil && b.WeeklyPct != nil && *b.WeeklyPct >= *budget.CeilingToday {
+	if in.Cfg.Budget.EnforceDailyCeiling &&
+		budget.CeilingToday != nil && b.WeeklyPct != nil && *b.WeeklyPct >= *budget.CeilingToday {
 		return false
 	}
 	return true
@@ -441,8 +509,13 @@ func bAvailable(in Input, budget BudgetState) bool {
 // budgetBlocked reports whether B has burned through today's ceiling and so
 // lost refuge candidacy until the next settlement (arbitration pin
 // 2026-11-15: switching in early would burn money past the line — money
-// before time).
-func budgetBlocked(budget BudgetState, b *domain.QuotaSnapshot) bool {
+// before time). Inert while budget enforcement is off (plan R2: the toggle
+// removes the ceiling from every switching decision; P6 then arbitrates on
+// the 5h resets alone).
+func budgetBlocked(cfg config.Config, budget BudgetState, b *domain.QuotaSnapshot) bool {
+	if !cfg.Budget.EnforceDailyCeiling {
+		return false
+	}
 	return budget.CeilingToday != nil && b.WeeklyPct != nil && *b.WeeklyPct >= *budget.CeilingToday
 }
 
@@ -452,7 +525,7 @@ func budgetBlocked(budget BudgetState, b *domain.QuotaSnapshot) bool {
 // reset info keeps A.
 func arbitrateBothDown(in Input, budget BudgetState, why string) Decision {
 	b := in.QuotaB
-	if budgetBlocked(budget, b) {
+	if budgetBlocked(in.Cfg, budget, b) {
 		return Decision{
 			Action: ActionStay,
 			Reason: fmt.Sprintf("%s;B 今日額度用完(週 %.1f%% ≥ 天花板 %.1f%%),喪失候選資格,留 A 等下次結算",

@@ -18,11 +18,18 @@ import (
 
 // Budget is the §7 pacing-budget block for account B: how much of the
 // weekly pool each budget day may burn, with a daily floor so the pace is
-// never zero. All three values are user-settable; defaults live in Default.
+// never zero. All values are user-settable; defaults live in Default.
 type Budget struct {
 	WeeklyTotalPct       float64 `json:"weeklyTotalPct"`       // weekly wall the budget protects (default 90, leaves headroom before 100)
 	MinDailyAllowancePct float64 `json:"minDailyAllowancePct"` // daily floor in pct points; 0 = strict to the wall
 	WorkdaysOnly         bool    `json:"workdaysOnly"`         // count only workdays as remaining budget days
+	// EnforceDailyCeiling gates whether the daily ceiling affects switching at
+	// all (2026-11-16 plan R2, user decision: 開關關=全面不影響切換). true
+	// (default — missing key in a config file layers onto the default, so
+	// existing users keep today's behavior): P5 forced return, P6 refuge-
+	// candidacy loss and the ceiling term of B's availability all apply.
+	// false: the ceiling is display+accounting only, never a switching input.
+	EnforceDailyCeiling bool `json:"enforceDailyCeiling"`
 }
 
 // Config mirrors every key of config.json: profiles, polling rhythm,
@@ -65,6 +72,7 @@ func Default() Config {
 			WeeklyTotalPct:       90,
 			MinDailyAllowancePct: 3,
 			WorkdaysOnly:         true,
+			EnforceDailyCeiling:  true,
 		},
 		StaleAfterMin:       10,
 		ParseFailAlertLimit: 5,

@@ -27,7 +27,7 @@ func TestStatusAndSwitchRoutes(t *testing.T) {
 	var switched string
 	srv := httptest.NewServer(ui.NewServerWithStatus(&cfg, nil,
 		func() ui.StatusView { return view },
-		func(target string) { switched = target }))
+		func(target string) { switched = target }, func(bool) {}))
 	defer srv.Close()
 
 	// GET /api/status:檢視原樣(當前槽位、快照數字、帳號定義)。

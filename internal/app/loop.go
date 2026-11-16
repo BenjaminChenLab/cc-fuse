@@ -71,6 +71,7 @@ type Loop struct {
 	Pending       policy.ManualCmd                 // tray 切A/切B command, consumed by the next Tick
 	PendingExt    policy.ExtEvent                  // settings-watch event, consumed by the next Tick
 	Budget        policy.BudgetState               // persisted pacing state, seeded from store at boot
+	budgetDirty   bool                             // 存檔觸發的預算重算尚未成功(R4;mu 下讀寫,Tick 負責清)
 	cache         map[string]*domain.QuotaSnapshot // last good sample per account (A4 reuse)
 	failA, failB  int                              // consecutive fresh-query failure streaks (PD2)
 	parseAlerted  bool                             // PD2 toast latched for the current failure streak
@@ -162,6 +163,19 @@ func (l *Loop) Tick(ctx context.Context, now time.Time) LoopResult {
 
 	// 6. 預算結算落帳(§7:記帳與動作解耦;冷啟結算也必須抵達 state)。
 	res.BudgetSaved = l.saveBudget(dec.Budget)
+
+	// 6b. 存檔觸發的預算重算閂鎖(R4):只有「真結算」輪(dec.Settled,信封
+	// 權威更新)清 dirty —— 僅改預警旗標的整顆覆寫輪(ensureEmitted)帶的是
+	// 舊信封,不清、不終結自癒(Phase-3 審查指出漂移);其餘 dirty 輪 →
+	// 重試 RefreshBudget,重算冪等、只併入天花板,Tick 尾端整顆覆寫的回退
+	// 下一輪自動自癒(複審 K2-Residual1)。
+	if dec.Settled {
+		l.mu.Lock()
+		l.budgetDirty = false
+		l.mu.Unlock()
+	} else if l.budgetDirtyPeek() {
+		l.RefreshBudget(now)
+	}
 	return res
 }
 
@@ -252,7 +266,9 @@ func (l *Loop) NextDelay(current string, a, b *domain.QuotaSnapshot) time.Durati
 }
 
 // Status snapshots the runtime facts the tray needs to render icon/tooltip
-// (design §8) without poking Loop internals directly.
+// (design §8) without poking Loop internals directly. CeilingToday carries
+// the persisted pacing ceiling so the switcher cards can show B's "今日
+// 天花板" line (2026-11-16 plan R1).
 type Status struct {
 	Current      string                // "A"/"B"/""
 	Autopilot    bool                  // false = paused
@@ -260,6 +276,7 @@ type Status struct {
 	KeyDead      bool                  // current account answered 401/403
 	ParseFailing bool                  // consecutive parse failures reached the alert limit (PD2 red)
 	A, B         *domain.QuotaSnapshot // last good sample per account (nil = none yet)
+	CeilingToday *float64              // B's pacing ceiling for today (nil = not settled yet)
 }
 
 // Status returns the current render inputs; safe to call from the tray
@@ -268,11 +285,12 @@ func (l *Loop) Status() Status {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	st := Status{
-		Current:   l.Current,
-		Autopilot: l.Autopilot,
-		Stale:     l.lastStale,
-		A:         l.cache["A"],
-		B:         l.cache["B"],
+		Current:      l.Current,
+		Autopilot:    l.Autopilot,
+		Stale:        l.lastStale,
+		A:            l.cache["A"],
+		B:            l.cache["B"],
+		CeilingToday: l.Budget.CeilingToday,
 	}
 	cur := st.A
 	if l.Current == "B" {
@@ -320,6 +338,90 @@ func (l *Loop) UpdateConfig(c config.Config) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.Cfg = c
+}
+
+// RefreshBudget recomputes today's pacing ceiling immediately after the
+// settings window saved budget changes (2026-11-16 plan R4) — the card
+// shows the new number on the next status read instead of tomorrow's
+// settlement. Landing discipline is per-path (folded §2.4, re-audit K2):
+//   - cold path returns a full envelope → land it whole, but only if a Tick
+//     settlement didn't land a fresh envelope meanwhile (else retry via the
+//     dirty latch);
+//   - recompute path returns only a ceiling → re-read the CURRENT envelope
+//     under the lock and splice just CeilingToday into it, with an envelope
+//     identity check (DayBoundary unchanged since compute) so neither this
+//     save nor a concurrent Tick settlement can clobber the other's fields.
+//
+// ok=false (stale/missing B data, hand-mangled state) latches budgetDirty;
+// the latch is cleared only by a Tick settlement or by the Tick retry path —
+// a Tick tail that reverts a freshly spliced ceiling heals on the next poll
+// because the recompute is Now-free and idempotent (re-audit K2-Residual1).
+func (l *Loop) RefreshBudget(now time.Time) {
+	l.mu.Lock()
+	in := policy.Input{
+		Now: now, Current: l.Current,
+		QuotaA: l.cache["A"], QuotaB: l.cache["B"],
+		Budget: l.Budget, Cfg: l.Cfg, AutopilotOn: l.Autopilot,
+	}
+	l.mu.Unlock()
+
+	nb, ok := policy.RefreshBudget(in)
+	if !ok {
+		l.mu.Lock()
+		l.budgetDirty = true
+		l.mu.Unlock()
+		l.logf("預算即時重算暫緩(資料不可用),已記待補算")
+		return
+	}
+
+	l.mu.Lock()
+	merged, landed := landRefresh(l.Budget, in.Budget, nb)
+	if !landed {
+		// 落帳前信封已被 Tick 換過(冷啟時日界出現/重算時日界不同)→
+		// 本輪結果過期,維持 dirty 交給下一輪重試。
+		l.budgetDirty = true
+		l.mu.Unlock()
+		return
+	}
+	l.Budget = merged
+	dirty := l.budgetDirty
+	l.mu.Unlock()
+	if nb.CeilingToday != nil {
+		l.logf("預算即時重算:今日天花板 %.1f%%(dirty=%v)", *nb.CeilingToday, dirty)
+	}
+}
+
+// landRefresh merges one RefreshBudget result into the CURRENT envelope
+// (re-read at landing time), per the folded per-path landing rule:
+//   - cold path (snapshot had no day-start baseline): land the whole new
+//     envelope, but only while no Tick settlement has landed one meanwhile
+//     (prev grew a boundary) — a settlement's envelope is fresher;
+//   - recompute path: envelope identity (prev and snapshot share the same
+//     DayBoundary) → splice only the new CeilingToday; otherwise discard.
+//
+// ok=false means "discard, keep retrying via the latch". Pure function —
+// the guards are unit-testable without concurrency (Phase-3 review finding:
+// the guards were previously zero-coverage branches).
+func landRefresh(prev, snap, nb policy.BudgetState) (policy.BudgetState, bool) {
+	if snap.DayStartWeekly == nil {
+		if prev.DayBoundary != nil {
+			return prev, false
+		}
+		return nb, true
+	}
+	if prev.DayBoundary == nil || snap.DayBoundary == nil || !prev.DayBoundary.Equal(*snap.DayBoundary) {
+		return prev, false
+	}
+	merged := prev
+	merged.CeilingToday = nb.CeilingToday
+	return merged, true
+}
+
+// budgetDirtyPeek reads the recompute latch (Tick retry path).
+func (l *Loop) budgetDirtyPeek() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.budgetDirty
 }
 
 // ConfigCopy returns the current config as a value, for UI surfaces that

@@ -14,8 +14,8 @@ const indexHTML = `<!doctype html>
 <meta charset="utf-8">
 <title>cc-fuse 設定</title>
 <style>
- body{background:#101012;color:#e4e4e7;font-family:"Microsoft JhengHei",sans-serif;font-size:14px;margin:16px;max-width:720px}
- h2{color:#e4e4e7;user-select:none}
+ body{background:#101012;color:#e4e4e7;font-family:"Microsoft JhengHei",sans-serif;font-size:16px;margin:16px;max-width:720px}
+ h2{color:#e4e4e7;user-select:none;font-size:20px}
  fieldset{border:1px solid #3f3f46;border-radius:8px;margin-bottom:12px}
  legend{color:#a1a1aa;padding:0 6px}
  label{display:inline-block;min-width:150px;color:#d4d4d8;cursor:help}
@@ -30,13 +30,13 @@ const indexHTML = `<!doctype html>
  .card.active{border-color:#2563eb}
  .av{width:44px;height:44px;border-radius:50%;background:#26262a;display:flex;align-items:center;justify-content:center;font-weight:bold;color:#a1a1aa;flex:none}
  .meta{flex:1;min-width:0}
- .name{font-size:16px;font-weight:bold}
- .url{color:#7dd3fc;font-size:12px;word-break:break-all;margin:2px 0}
- .quota{display:flex;gap:16px;color:#a1a1aa;font-size:13px}
+ .name{font-size:18px;font-weight:bold}
+ .url{color:#7dd3fc;font-size:14px;word-break:break-all;margin:2px 0}
+ .quota{display:flex;gap:16px;color:#d4d4d8;font-size:15px}
  .quota b{font-weight:bold}
- .slot{font-size:11px;color:#a1a1aa;border:1px solid #3f3f46;border-radius:4px;padding:0 5px;margin-left:8px;vertical-align:middle;font-weight:normal}
+ .slot{font-size:12px;color:#d4d4d8;border:1px solid #3f3f46;border-radius:4px;padding:0 5px;margin-left:8px;vertical-align:middle;font-weight:normal}
  .good{color:#4ade80}.warn{color:#fb923c}.bad{color:#f87171}
- .cd{color:#71717a;font-size:11px}
+ .cd{color:#d4d4d8;font-size:14px}
  .bar{margin:8px 0 16px;color:#a1a1aa}
  #msg{margin-left:8px;color:#4ade80}
  #imp{margin-left:8px;color:#7dd3fc;white-space:pre-wrap}
@@ -47,7 +47,7 @@ const indexHTML = `<!doctype html>
 <body>
 <h2>切換</h2>
 <div id="cards"><div class="quota">載入中…</div></div>
-<div class="bar"><span id="hint"></span> <button id="refresh" style="margin-left:12px">重新整理</button></div>
+<div class="bar"><span id="hint"></span> <button id="apToggle" style="margin-left:12px"></button> <button id="refresh" style="margin-left:12px">重新整理</button></div>
 <hr>
 <h2>設定</h2>
 
@@ -82,6 +82,7 @@ const indexHTML = `<!doctype html>
 </fieldset>
 
 <fieldset><legend>B 配速預算</legend>
+ <div><label title="勾選:B 燒到當日天花板時強制切回 A(寧停等不超支),燒過線的 B 也不當避難所(A 過熱時留 A 等下次結算);不勾:B 的當日天花板只顯示與記帳,完全不影響自動切換。">天花板強制切回 A</label><input type="checkbox" id="bEnforce" title="勾選:B 燒到當日天花板時強制切回 A(寧停等不超支),燒過線的 B 也不當避難所(A 過熱時留 A 等下次結算);不勾:B 的當日天花板只顯示與記帳,完全不影響自動切換。"></div>
  <div><label title="B 的週額度護欄:即使天天燒到當日天花板,整週用量也只會收斂到這個值(預設 90,真牆 100% 前留餘裕)。">週預算總量(%)</label><input type="number" id="bWeekly" step="0.1" title="B 的週額度護欄:即使天天燒到當日天花板,整週用量也只會收斂到這個值(預設 90,真牆 100% 前留餘裕)。"></div>
  <div><label title="每天至少分配這個額度百分比(剩餘天數平均算出來更少時用它墊底)。設 0=嚴格平均,不保底。">每日保底(%)</label><input type="number" id="bDaily" step="0.1" title="每天至少分配這個額度百分比(剩餘天數平均算出來更少時用它墊底)。設 0=嚴格平均,不保底。"></div>
  <div><label title="勾選:剩餘天數只數工作日,週末不佔每日額度;不勾:每天額度=剩餘÷日曆天數。">只數工作日</label><input type="checkbox" id="bWork" title="勾選:剩餘天數只數工作日,週末不佔每日額度;不勾:每天額度=剩餘÷日曆天數。"></div>
@@ -150,6 +151,20 @@ function buildCard(slot,p,snap,s){
  q.appendChild(quotaCell("5h",snap?snap.fiveHourPct:null,snap?snap.fiveHourReset:null));
  q.appendChild(quotaCell("7d",snap?snap.weeklyPct:null,snap?snap.weeklyReset:null));
  meta.appendChild(q);
+ // B 卡:今日天花板(R1)——開=到點強制切回 A、關=不強制;未結算過則整行不建。
+ if(slot==="B"&&s.ceilingToday!=null){
+  var note=s.enforceDailyCeiling?"到點強制切回 A":"不強制";
+  var cl=document.createElement("div");cl.className="cd";
+  cl.textContent="今日天花板 週"+s.ceilingToday.toFixed(1)+"%("+note+")";
+  meta.appendChild(cl);
+ }
+ // A 卡:恢復預計(R3,只看 5h 重置;週窗口也超標時此估計偏樂觀,使用者已知悉)。
+ if(slot==="A"&&snap&&snap.fiveHourReset){
+  var hh=new Date(snap.fiveHourReset),ms=hh-Date.now();
+  var rl=document.createElement("div");rl.className="cd";
+  rl.textContent="恢復預計 "+hh.toLocaleTimeString("zh-TW",{hour:"2-digit",minute:"2-digit",hour12:false})+(ms>0?"(⏱"+fmtCD(ms)+")":"");
+  meta.appendChild(rl);
+ }
  row.appendChild(meta);
  var btn=document.createElement("button");
  if(s.current===slot){btn.className="primary";btn.disabled=true;btn.textContent="使用中"}
@@ -169,6 +184,11 @@ function renderStatus(s){
  if(s.keyDead)h.push("目前帳號 key 失效(401/403)");
  if(s.parseFailing)h.push("連續解析失敗(紅燈)");
  document.getElementById("hint").textContent=h.join(" · ");
+ // 自動切換開關(R5):與系統匣共用同一旗標,點完立即重抓。
+ var ap=document.getElementById("apToggle");
+ ap.textContent=s.autopilot?"暫停自動":"恢復自動";
+ ap.title=s.autopilot?"暫停自動切換(手動切換仍可用)":"恢復自動切換";
+ ap.onclick=function(){api("POST","/api/autopilot",{on:!s.autopilot},function(){fetchStatus()})};
 }
 function fetchStatus(){
  api("GET","/api/status",null,function(st,body){
@@ -191,6 +211,7 @@ function load(c){
  val2("warn",c.warnThreshold);val2("stale",c.staleAfterMin);val2("pf",c.parseFailAlertLimit);
  val2("poll",c.pollIntervalSec);val2("fast",c.fastPollSec);val2("fastAbove",c.fastPollAbovePct);
  val2("bWeekly",c.budget?c.budget.weeklyTotalPct:0);val2("bDaily",c.budget?c.budget.minDailyAllowancePct:0);
+ document.getElementById("bEnforce").checked=!!(c.budget&&c.budget.enforceDailyCeiling);
  document.getElementById("bWork").checked=!!(c.budget&&c.budget.workdaysOnly);
  val2("qm",c.quotaModeFile);val2("proxy",c.proxyUrl);
  document.getElementById("auto").checked=!!c.autoStart;
@@ -204,7 +225,7 @@ function collect(){
   parseFailAlertLimit:parseInt(val("pf")||"0",10),
   pollIntervalSec:parseInt(val("poll")||"0",10),fastPollSec:parseInt(val("fast")||"0",10),
   fastPollAbovePct:num("fastAbove"),
-  budget:{weeklyTotalPct:num("bWeekly"),minDailyAllowancePct:num("bDaily"),workdaysOnly:document.getElementById("bWork").checked},
+  budget:{weeklyTotalPct:num("bWeekly"),minDailyAllowancePct:num("bDaily"),workdaysOnly:document.getElementById("bWork").checked,enforceDailyCeiling:document.getElementById("bEnforce").checked},
   quotaModeFile:val("qm"),autoStart:document.getElementById("auto").checked,
   proxyUrl:val("proxy")
  };
@@ -213,6 +234,7 @@ document.getElementById("save").onclick=function(){
  document.getElementById("msg").textContent="存檔中…";
  api("POST","/api/config",collect(),function(st,body){
   document.getElementById("msg").textContent=st===200?"已存檔":("失敗("+st+"):"+body);
+  if(st===200)fetchStatus(); // 存檔當下立即重抓(R4:天花板即時反映,不等 5 秒自刷)
  });
 };
 

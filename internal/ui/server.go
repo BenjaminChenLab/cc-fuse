@@ -26,29 +26,34 @@ const maxBodyBytes = 1 << 20
 
 // Server serves the settings API for one live config pointer. NewServer
 // returns it as a plain http.Handler so the app can host it on any
-// loopback listener. The status/switch functions power the switcher cards
-// (both nil in the plain NewServer — those routes answer 501 then).
+// loopback listener. The status/switch/autopilot functions power the
+// switcher screen (all nil in the plain NewServer — those routes answer
+// 501 then).
 type Server struct {
-	mu       sync.Mutex
-	cfg      *config.Config
-	onSave   func(config.Config) error
-	status   func() StatusView
-	switcher func(target string)
+	mu        sync.Mutex
+	cfg       *config.Config
+	onSave    func(config.Config) error
+	status    func() StatusView
+	switcher  func(target string)
+	autopilot func(on bool)
 }
 
 // StatusView is the switcher-screen payload: who is live, whether the
 // autopilot is on, the health flags the page surfaces, and each slot's
 // latest quota snapshot. Profiles carries the A/B definitions so the page
-// can render names and URLs.
+// can render names and URLs. CeilingToday + EnforceDailyCeiling feed B's
+// 今日天花板 card line and its 強制/不強制 annotation (2026-11-16 plan R1/R2).
 type StatusView struct {
-	Current      string                `json:"current"`
-	Autopilot    bool                  `json:"autopilot"`
-	Stale        bool                  `json:"stale"`
-	KeyDead      bool                  `json:"keyDead"`
-	ParseFailing bool                  `json:"parseFailing"`
-	A            *domain.QuotaSnapshot `json:"a"`
-	B            *domain.QuotaSnapshot `json:"b"`
-	Profiles     []domain.Profile      `json:"profiles"`
+	Current             string                `json:"current"`
+	Autopilot           bool                  `json:"autopilot"`
+	Stale               bool                  `json:"stale"`
+	KeyDead             bool                  `json:"keyDead"`
+	ParseFailing        bool                  `json:"parseFailing"`
+	A                   *domain.QuotaSnapshot `json:"a"`
+	B                   *domain.QuotaSnapshot `json:"b"`
+	Profiles            []domain.Profile      `json:"profiles"`
+	CeilingToday        *float64              `json:"ceilingToday"`        // B's pacing ceiling for today (null = not settled)
+	EnforceDailyCeiling bool                  `json:"enforceDailyCeiling"` // ceiling-forced-switch toggle state
 }
 
 // NewServer builds the settings API handler over cfg (the app's live config
@@ -60,11 +65,12 @@ func NewServer(cfg *config.Config, onSave func(config.Config) error) http.Handle
 }
 
 // NewServerWithStatus additionally wires the switcher screen: status feeds
-// the provider cards' quota numbers, switcher executes a manual P1 switch.
-// Both are app-level closures the main wiring adapts from *app.Loop.
+// the provider cards' quota numbers, switcher executes a manual P1 switch,
+// autopilot flips the Loop's on/off flag (2026-11-16 plan R5). All are
+// app-level closures the main wiring adapts from *app.Loop.
 func NewServerWithStatus(cfg *config.Config, onSave func(config.Config) error,
-	status func() StatusView, switcher func(target string)) http.Handler {
-	return &Server{cfg: cfg, onSave: onSave, status: status, switcher: switcher}
+	status func() StatusView, switcher func(target string), autopilot func(on bool)) http.Handler {
+	return &Server{cfg: cfg, onSave: onSave, status: status, switcher: switcher, autopilot: autopilot}
 }
 
 // ServeHTTP routes by exact path; anything unlisted is 404 so probe paths
@@ -92,6 +98,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.status())
 	case "/api/switch":
 		s.postSwitch(w, r)
+	case "/api/autopilot":
+		s.postAutopilot(w, r)
 	case "/api/import":
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -180,6 +188,41 @@ func (s *Server) postSwitch(w http.ResponseWriter, r *http.Request) {
 		Ok     bool   `json:"ok"`
 		Target string `json:"target"`
 	}{Ok: true, Target: req.Target})
+}
+
+// autopilotReq is the POST /api/autopilot body: the requested autopilot
+// state (2026-11-16 plan R5 — the page's 自動切換 button).
+type autopilotReq struct {
+	On bool `json:"on"`
+}
+
+// postAutopilot flips the autopilot via the wired closure and answers 200;
+// bad JSON, an unwired closure (501) or a non-POST method (405) never reach
+// production code — same conventions as postSwitch.
+func (s *Server) postAutopilot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.autopilot == nil {
+		http.Error(w, "autopilot not wired in this build", http.StatusNotImplemented)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var req autopilotReq
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "not valid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.autopilot(req.On)
+	writeJSON(w, http.StatusOK, struct {
+		Ok bool `json:"ok"`
+		On bool `json:"on"`
+	}{Ok: true, On: req.On})
 }
 
 // importReq is the POST /api/import body: where the cc-switch db lives.
