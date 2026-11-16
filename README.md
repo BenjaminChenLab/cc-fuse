@@ -74,4 +74,4 @@ Details: design doc `docs/blueprints/2026-11-15-cc-fuse-design.md`, release note
 
 ## License
 
-[MIT](LICENSE) © 2026 Benjamin (BenjaminChenLab)
+[MIT](LICENSE) © 2026 Benjamin Chen
