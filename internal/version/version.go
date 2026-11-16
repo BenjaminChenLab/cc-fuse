@@ -5,4 +5,4 @@
 package version
 
 // Version is the current release, semver without the leading v.
-const Version = "0.1.0"
+const Version = "0.2.0"
