@@ -1,6 +1,6 @@
 // Package tray renders the cc-fuse system-tray presence (design §8): a
 // four-color icon, a dual-percentage tooltip and the right-click menu
-// [狀態 | 切到 A | 切到 B | 暫停/恢復自動 | 設定 | 結束].
+// [狀態 | 切到 A | 切到 B | 暫停/恢復自動切 B | 設定 | 結束].
 //
 // PickIcon/PickTooltip/StatusText are the pure rendering decisions
 // (unit-tested); Run is the systray wiring and stays thin — every menu
@@ -28,8 +28,8 @@ const (
 	IconOrangeB                  // 橘實心=自動切換中,使用 B
 	IconGray                     // 灰實心=資料過期或無法判定
 	IconRed                      // 紅=金鑰失效或連續解析失敗
-	IconHollowA                  // 綠空心環=暫停自動,使用 A
-	IconHollowB                  // 橘空心環=暫停自動,使用 B
+	IconHollowA                  // 綠空心環=暫停自動切 B,使用 A
+	IconHollowB                  // 橘空心環=暫停自動切 B,使用 B
 )
 
 // PickIcon resolves the render state by severity: red beats the paused
@@ -79,7 +79,7 @@ func StatusText(st app.Status) string {
 	case st.ParseFailing || st.KeyDead:
 		state = "異常"
 	case !st.Autopilot:
-		state = "已暫停自動"
+		state = "已暫停自動切B"
 	case st.Stale:
 		state = "資料過期"
 	}

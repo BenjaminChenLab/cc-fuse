@@ -67,7 +67,7 @@ type Loop struct {
 	mu sync.Mutex // guards every field below
 
 	Current       string                           // who settings.json points at: "A"/"B"
-	Autopilot     bool                             // false = no automatic switching (manual still works)
+	Autopilot     bool                             // false = flee-to-B blocked (directional gate; B→A returns still decide)
 	Pending       policy.ManualCmd                 // tray 切A/切B command, consumed by the next Tick
 	PendingExt    policy.ExtEvent                  // settings-watch event, consumed by the next Tick
 	Budget        policy.BudgetState               // persisted pacing state, seeded from store at boot
@@ -142,9 +142,9 @@ func (l *Loop) Tick(ctx context.Context, now time.Time) LoopResult {
 		res = l.doSwitch(dec, cfg)
 	case policy.ActionPause:
 		l.SetAutopilot(false)
-		l.Not.Notify("cc-fuse 已暫停", dec.Reason)
+		l.Not.Notify("cc-fuse 已暫停自動切 B", dec.Reason)
 		res.Notified = true
-		l.logf("已暫停自動切換:%s", dec.Reason)
+		l.logf("已暫停自動切 B(A→B 封鎖,切回 A 照常):%s", dec.Reason)
 	default:
 		// stale 閂鎖只在 Tick 執行緒讀寫(唯一寫者;Status 不看它),免鎖即可。
 		if dec.Stale && !l.staleNotified {
@@ -320,7 +320,7 @@ func (l *Loop) ApplyExternal(kind string) {
 	l.nudge()
 }
 
-// SetAutopilot flips automatic switching (tray 暫停/恢復自動). Resuming
+// SetAutopilot flips automatic flee-to-B (tray 暫停/恢復自動切 B). Resuming
 // wakes Run so the re-enabled autopilot re-decides immediately; pausing
 // needs no extra round (the next scheduled tick stays silent anyway).
 func (l *Loop) SetAutopilot(on bool) {

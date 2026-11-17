@@ -46,12 +46,17 @@ type Config struct {
 	RecoveryThreshold5h     float64          `json:"recoveryThreshold5h"`     // P4: A 5h% at/below this → switch back
 	RecoveryThresholdWeekly float64          `json:"recoveryThresholdWeekly"` // P4: A weekly% at/below this → switch back
 	WarnThreshold           float64          `json:"warnThreshold"`           // P7: one-shot warning when the active window crosses this
-	Budget                  Budget           `json:"budget"`
-	StaleAfterMin           int              `json:"staleAfterMin"`       // data older than this pauses all decisions (§4)
-	ParseFailAlertLimit     int              `json:"parseFailAlertLimit"` // consecutive parse failures before the red-alert toast (§11.8, PD2)
-	QuotaModeFile           string           `json:"quotaModeFile"`       // quota-mode.md the writer flips the mode: line in
-	AutoStart               bool             `json:"autoStart"`           // launch at Windows logon (Run registry key)
-	ProxyURL                string           `json:"proxyUrl"`            // empty = direct connection (PD1)
+	// NoFleeOnWeekend gates the A→B direction by day (2026-11-17 directional
+	// flee gate): checked, Saturdays/Sundays (local machine time) block the
+	// automatic flee to B (P3 and P6's switch-to-B) while B→A returns (P4/P5)
+	// keep working. Off (default) = existing behavior unchanged.
+	NoFleeOnWeekend     bool   `json:"noFleeOnWeekend"`
+	Budget              Budget `json:"budget"`
+	StaleAfterMin       int    `json:"staleAfterMin"`       // data older than this pauses all decisions (§4)
+	ParseFailAlertLimit int    `json:"parseFailAlertLimit"` // consecutive parse failures before the red-alert toast (§11.8, PD2)
+	QuotaModeFile       string `json:"quotaModeFile"`       // quota-mode.md the writer flips the mode: line in
+	AutoStart           bool   `json:"autoStart"`           // launch at Windows logon (Run registry key)
+	ProxyURL            string `json:"proxyUrl"`            // empty = direct connection (PD1)
 }
 
 // Default returns the §9 default table: polling 60/20/80, switch lines 90/90,
@@ -68,6 +73,7 @@ func Default() Config {
 		RecoveryThreshold5h:     30,
 		RecoveryThresholdWeekly: 60,
 		WarnThreshold:           80,
+		NoFleeOnWeekend:         false,
 		Budget: Budget{
 			WeeklyTotalPct:       90,
 			MinDailyAllowancePct: 3,

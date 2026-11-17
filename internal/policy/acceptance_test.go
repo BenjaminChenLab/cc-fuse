@@ -370,14 +370,14 @@ func TestP8ExternalEvents(t *testing.T) {
 	}
 }
 
-// --- 自駕開關 ---
+// --- 自駕開關(2026-11-17 方向性:暫停只封鎖 A→B;完整案例見 fleegate_test.go) ---
 
 func TestAutopilotOff(t *testing.T) {
 	a, b := healthy(wed16)
 	a.FiveHourPct = f(95)
 	d := evaluate(t, evalIn{now: wed16, current: "A", a: a, b: b, autoplt: false})
-	if d.Action != actionNone {
-		t.Fatalf("autopilot off must block auto switch: %+v", d)
+	if d.Action != actionStay {
+		t.Fatalf("autopilot off must block flee as an explicit stay (directional gate): %+v", d)
 	}
 	d2 := evaluate(t, evalIn{now: wed16, current: "A", a: a, b: b, autoplt: false, manual: policy.ManualCmd{Target: "B"}})
 	if d2.Action != actionSwitch || d2.Target != "B" {

@@ -21,17 +21,23 @@ func TestPageBudgetMarkers(t *testing.T) {
 		"恢復預計",           // A 卡恢復時間行(只看 5h)
 		"api/autopilot",  // 自動切換按鈕的呼叫
 		"fetchStatus();", // 存檔成功後立即重抓
+		// 2026-11-17 方向性避難閘:六日不自動切 B 的勾選框,load/collect 同理防漏。
+		"noFleeWknd",         // 勾選框 id(閾值區)
+		"自動切 B:已暫停(切回 A 照常)", // 暫停語意=方向性的提示文字(2026-11-17 決定 3)
 		// 語意釘死(Phase-3 審查突變5:子串存在抓不了「寫反」與「可刪」)——
 		// collect 的極性(不得寫成 !checked)與存檔成功分支的立即重抓,
 		// 頁面是靜態常數,子串級斷言可承受。
 		`enforceDailyCeiling:document.getElementById("bEnforce").checked`,
+		`noFleeOnWeekend:document.getElementById("noFleeWknd").checked`,
 		`if(st===200)fetchStatus();`,
 	} {
 		if !strings.Contains(html, m) {
 			t.Fatalf("indexHTML 缺標記 %q", m)
 		}
 	}
-	if n := strings.Count(html, "enforceDailyCeiling"); n < 2 {
-		t.Fatalf("enforceDailyCeiling 必須同時出現在 load 與 collect,實際 %d 次", n)
+	for _, k := range []string{"enforceDailyCeiling", "noFleeOnWeekend"} {
+		if n := strings.Count(html, k); n < 2 {
+			t.Fatalf("%s 必須同時出現在 load 與 collect,實際 %d 次", k, n)
+		}
 	}
 }

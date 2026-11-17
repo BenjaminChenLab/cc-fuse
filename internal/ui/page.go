@@ -92,6 +92,7 @@ const indexHTML = `<!doctype html>
  <div><label data-i18n="lblRc5" data-i18n-title="tipRc5" title="在 B 時:A 的 5 小時用量降到 ≤ 此值才算恢復,自動切回 A。">恢復線 5h</label><input type="number" id="rc5" step="0.1"></div>
  <div><label data-i18n="lblRcW" data-i18n-title="tipRcW" title="在 B 時:A 的週窗口 ≤ 此值(且 5 小時也達標)才切回 A。恢復線遠低於切換線,避免臨界點來回抖動。">恢復線 週</label><input type="number" id="rcW" step="0.1"></div>
  <div><label data-i18n="lblWarn" data-i18n-title="tipWarn" title="目前帳號任一窗口跨過此值時彈一次預警通知(每窗口只報一次,不洗版)。">預警線</label><input type="number" id="warn" step="0.1"></div>
+ <div><label data-i18n="lblNoFleeWknd" data-i18n-title="tipNoFleeWknd" title="勾選:週六、週日不自動切 B——A 過熱也留守 A(手動切換不受限;A 恢復或 B 燒到當日天花板仍會自動切回 A)。不勾:週末照常自動切 B。">六日不自動切 B</label><span class="switch"><input type="checkbox" id="noFleeWknd" data-i18n-title="tipNoFleeWknd" title="勾選:週六、週日不自動切 B——A 過熱也留守 A(手動切換不受限;A 恢復或 B 燒到當日天花板仍會自動切回 A)。不勾:週末照常自動切 B。"><i></i></span></div>
  <div><label data-i18n="lblStale" data-i18n-title="tipStale" title="額度資料超過此分鐘數視同過期:不做任何自動切換、只通知一次。查詢暫時失敗時沿用上次數字,老化超過此限才認定過期。">資料過期(分)</label><input type="number" id="stale" step="1"></div>
  <div><label data-i18n="lblParseFail" data-i18n-title="tipParseFail" title="連續 N 次查詢/解析失敗 → 紅色圖示+通知(z.ai 回應可能改版,該更新程式)。0=停用警報。">連續解析失敗警報次數</label><input type="number" id="pf" step="1"></div>
 </fieldset>
@@ -129,7 +130,7 @@ var I18N={
   legA:"供應商 A(共用帳號,永遠優先)",legB:"供應商 B(自購帳號,避難所)",legThresholds:"閾值(%)",
   legPolling:"輪詢(秒)",legBudget:"B 配速預算",legOther:"其他",
   lblName:"名稱",lblKey:"API key",lblEndpoint:"端點",lblModelEnv:"模型 env(JSON)",
-  lblSw5:"切換線 5h",lblSwW:"切換線 週",lblRc5:"恢復線 5h",lblRcW:"恢復線 週",lblWarn:"預警線",
+  lblSw5:"切換線 5h",lblSwW:"切換線 週",lblRc5:"恢復線 5h",lblRcW:"恢復線 週",lblWarn:"預警線",lblNoFleeWknd:"六日不自動切 B",
   lblStale:"資料過期(分)",lblParseFail:"連續解析失敗警報次數",
   lblPoll:"一般間隔",lblFast:"快輪詢間隔",lblFastAbove:"快輪詢觸發(%)",
   lblEnforce:"天花板強制切回 A",lblWeeklyTotal:"週預算總量(%)",lblDailyFloor:"每日保底(%)",lblWorkdays:"只數工作日",
@@ -144,6 +145,7 @@ var I18N={
   tipRc5:"在 B 時:A 的 5 小時用量降到 ≤ 此值才算恢復,自動切回 A。",
   tipRcW:"在 B 時:A 的週窗口 ≤ 此值(且 5 小時也達標)才切回 A。恢復線遠低於切換線,避免臨界點來回抖動。",
   tipWarn:"目前帳號任一窗口跨過此值時彈一次預警通知(每窗口只報一次,不洗版)。",
+  tipNoFleeWknd:"勾選:週六、週日不自動切 B——A 過熱也留守 A(手動切換不受限;A 恢復或 B 燒到當日天花板仍會自動切回 A)。不勾:週末照常自動切 B。",
   tipStale:"額度資料超過此分鐘數視同過期:不做任何自動切換、只通知一次。查詢暫時失敗時沿用上次數字,老化超過此限才認定過期。",
   tipParseFail:"連續 N 次查詢/解析失敗 → 紅色圖示+通知(z.ai 回應可能改版,該更新程式)。0=停用警報。",
   tipPoll:"平時多久查詢一次兩個帳號的額度。",
@@ -158,9 +160,9 @@ var I18N={
   tipAuto:"存檔時立即寫入/移除登錄檔 Run 機碼:開機自動啟動 cc-fuse。",
   active:"使用中",switchBtn:"切換",switchTip:"手動切換(P1 最優先,立即生效)",
   ceilingChip:"今日天花板 週",enforceNote:"到點強制切回 A",noEnforceNote:"不強制",recoveryChip:"恢復預計 ",
-  hintAutoOn:"自動切換:開",hintAutoOff:"自動切換:已暫停",hintStale:"額度資料過期",
+  hintAutoOn:"自動切 B:開",hintAutoOff:"自動切 B:已暫停(切回 A 照常)",hintStale:"額度資料過期",
   hintKeyDead:"目前帳號 key 失效(401/403)",hintParse:"連續解析失敗(紅燈)",
-  apPause:"暫停自動",apResume:"恢復自動",apPauseTip:"暫停自動切換(手動切換仍可用)",apResumeTip:"恢復自動切換",
+  apPause:"暫停自動切 B",apResume:"恢復自動切 B",apPauseTip:"暫停自動切 B(手動切換仍可用;A 恢復或 B 燒到當日天花板仍會自動切回 A)",apResumeTip:"恢復自動切 B",
   saving:"存檔中…",saved:"已存檔",saveFailed:"失敗",
   importing:"匯入中…",importFailed:"匯入失敗:",importFoundA:"找到 ",importFoundB:" 個 Claude 供應商——點「設為 A / 設為 B」自動填滿四欄,完成後按存檔。",
   filledPrefix:"已填入 ",filledSuffix:"——確認後按存檔",setAsA:"設為 A",setAsB:"設為 B",
@@ -196,14 +198,16 @@ var I18N={
   tipWeeklyTotal:"B's weekly guardrail: even if B burns to its daily ceiling every day, the whole week converges to this value (default 90 — headroom before the hard 100% wall).",
   tipDailyFloor:"The minimum percentage allocated to each day (when the remaining-days average comes out lower). 0 = strict average, no floor.",
   tipWorkdays:"On: remaining days count workdays only — weekends consume no daily allowance. Off: daily allowance = remaining ÷ calendar days.",
+  lblNoFleeWknd:"No auto-flee on weekends",
+  tipNoFleeWknd:"Checked: on Saturdays and Sundays cc-fuse will not flee to B automatically — it stays on A even when hot (manual switching unaffected; recovery and ceiling returns to A still apply). Unchecked: weekends behave like weekdays.",
   tipQmPath:"On every switch, flip this file's mode: line (RACING/SAVING) — the race/save signal other Claude sessions read. A missing file is skipped without affecting the switch.",
   tipProxy:"HTTP proxy URL for the quota API; empty = direct connection.",
   tipAuto:"On save, writes/removes the registry Run key that launches cc-fuse at logon.",
   active:"Active",switchBtn:"Switch",switchTip:"Manual switch (P1 top priority, immediate)",
   ceilingChip:"Today's ceiling wk ",enforceNote:"forces switch back to A",noEnforceNote:"info only",recoveryChip:"Recovery est. ",
-  hintAutoOn:"Autopilot: on",hintAutoOff:"Autopilot: paused",hintStale:"quota data stale",
+  hintAutoOn:"Auto-flee to B: on",hintAutoOff:"Auto-flee to B: paused (returns to A still work)",hintStale:"quota data stale",
   hintKeyDead:"current key dead (401/403)",hintParse:"sustained parse failures",
-  apPause:"Pause autopilot",apResume:"Resume autopilot",apPauseTip:"Pause automatic switching (manual switching still works)",apResumeTip:"Resume automatic switching",
+  apPause:"Pause auto-flee",apResume:"Resume auto-flee",apPauseTip:"Pause the automatic flee to B (manual switching still works; recovery and ceiling returns to A still apply)",apResumeTip:"Resume the automatic flee to B",
   saving:"Saving…",saved:"Saved",saveFailed:"Failed",
   importing:"Importing…",importFailed:"Import failed: ",importFoundA:"Found ",importFoundB:" Claude providers — click Set as A / Set as B to fill both profiles, then press Save.",
   filledPrefix:"Filled ",filledSuffix:" — review and press Save",setAsA:"Set as A",setAsB:"Set as B",
@@ -352,6 +356,7 @@ function load(c){
  val2("bWeekly",c.budget?c.budget.weeklyTotalPct:0);val2("bDaily",c.budget?c.budget.minDailyAllowancePct:0);
  document.getElementById("bEnforce").checked=!!(c.budget&&c.budget.enforceDailyCeiling);
  document.getElementById("bWork").checked=!!(c.budget&&c.budget.workdaysOnly);
+ document.getElementById("noFleeWknd").checked=!!c.noFleeOnWeekend;
  val2("qm",c.quotaModeFile);val2("proxy",c.proxyUrl);
  document.getElementById("auto").checked=!!c.autoStart;
 }
@@ -364,6 +369,7 @@ function collect(){
   parseFailAlertLimit:parseInt(val("pf")||"0",10),
   pollIntervalSec:parseInt(val("poll")||"0",10),fastPollSec:parseInt(val("fast")||"0",10),
   fastPollAbovePct:num("fastAbove"),
+  noFleeOnWeekend:document.getElementById("noFleeWknd").checked,
   budget:{weeklyTotalPct:num("bWeekly"),minDailyAllowancePct:num("bDaily"),workdaysOnly:document.getElementById("bWork").checked,enforceDailyCeiling:document.getElementById("bEnforce").checked},
   quotaModeFile:val("qm"),autoStart:document.getElementById("auto").checked,
   proxyUrl:val("proxy")

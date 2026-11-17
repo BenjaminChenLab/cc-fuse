@@ -48,7 +48,7 @@ func Run(ctx context.Context, h Handles) {
 	systray.Run(func() { onReady(ctx, h) }, func() {})
 }
 
-// onReady builds the menu [狀態 | 切到 A | 切到 B | 暫停/恢復自動 | 設定 | 結束]
+// onReady builds the menu [狀態 | 切到 A | 切到 B | 暫停/恢復自動切 B | 設定 | 結束]
 // and starts the repaint goroutine (design §8 menu layout).
 func onReady(ctx context.Context, h Handles) {
 	if h.Loop == nil {
@@ -63,7 +63,7 @@ func onReady(ctx context.Context, h Handles) {
 	}
 	swA := systray.AddMenuItem("切到 A(共用)", "手動切到共用帳號 A(P1 手動最優先)")
 	swB := systray.AddMenuItem("切到 B(自購)", "手動切到自購帳號 B(P1 手動最優先)")
-	pause := systray.AddMenuItem(pauseTitle(st), "暫停/恢復自動切換")
+	pause := systray.AddMenuItem(pauseTitle(st), "暫停/恢復自動切 B(只封鎖切去 B;A 恢復或 B 到天花板仍會切回 A)")
 	quit := systray.AddMenuItem("結束", "結束 cc-fuse")
 
 	// 選單動作只改 Loop 的旋鈕,判定交給下一輪 Tick(P1 路徑)。
@@ -123,12 +123,14 @@ func repaint(ctx context.Context, h Handles, status, pause *systray.MenuItem) {
 	}
 }
 
-// pauseTitle renders the 暫停/恢復 item's label from the autopilot flag.
+// pauseTitle renders the 暫停/恢復自動切 B item's label from the autopilot
+// flag (2026-11-17 directional semantics: pausing blocks only the flee to B;
+// returns to A still decide).
 func pauseTitle(st app.Status) string {
 	if st.Autopilot {
-		return "暫停自動切換"
+		return "暫停自動切 B"
 	}
-	return "恢復自動切換"
+	return "恢復自動切 B"
 }
 
 // iconCache memoizes rendered ICO bytes per state (repaint runs every 2s).

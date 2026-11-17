@@ -66,8 +66,18 @@ func TestStatusText(t *testing.T) {
 			t.Fatalf("status line %q missing %q", got, want)
 		}
 	}
-	if got := StatusText(app.Status{Autopilot: false}); !strings.Contains(got, "已暫停自動") {
+	if got := StatusText(app.Status{Autopilot: false}); !strings.Contains(got, "已暫停自動切B") {
 		t.Fatalf("paused status line wrong: %q", got)
+	}
+}
+
+// 文案(2026-11-17 決定 3):暫停按鈕只針對「自動切 B」方向,不是全停。
+func TestPauseTitleDirectional(t *testing.T) {
+	if got := pauseTitle(app.Status{Autopilot: true}); got != "暫停自動切 B" {
+		t.Fatalf("pause label wrong: %q", got)
+	}
+	if got := pauseTitle(app.Status{Autopilot: false}); got != "恢復自動切 B" {
+		t.Fatalf("resume label wrong: %q", got)
 	}
 }
 

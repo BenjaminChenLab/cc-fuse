@@ -20,11 +20,14 @@ type Action int
 
 // Decision verbs (enum pin 2026-11-15, audit O1):
 // ActionNone skips this round's decision only (stale/missing data, dead key,
-// autopilot off, external adoption) — it is not a mode pause; ActionStay
+// external adoption) — it is not a mode pause; ActionStay
 // positively keeps the current account; ActionSwitch moves to Decision.Target;
 // ActionPause stops autopilot (the only producer is the unknown-provider
 // event). ActionResume is never produced here — resuming is a user action
 // owned by T03, which flips AutopilotOn directly.
+// 2026-11-17 directional flee gate: a paused autopilot (or 六日) is NOT a
+// None producer anymore — it blocks only the A→B paths (P3, P6's switch-to-B)
+// and surfaces as an explicit ActionStay; B→A returns (P4/P5) keep deciding.
 const (
 	ActionNone Action = iota
 	ActionStay
@@ -81,7 +84,7 @@ type Input struct {
 	QuotaA, QuotaB *domain.QuotaSnapshot // nil = no data for that side
 	Budget         BudgetState           // persisted pacing state (read)
 	Cfg            config.Config         // every threshold is user-settable
-	AutopilotOn    bool                  // false = no automatic switching (manual still works)
+	AutopilotOn    bool                  // false = flee-to-B blocked (directional gate); B→A returns still decide; manual always works
 	External       ExtEvent              // settings-watch event (empty = none)
 	Manual         ManualCmd             // tray command (empty = none)
 }
@@ -109,9 +112,11 @@ type Decision struct {
 // 2026-11-15 pins: P1 manual beats everything (including the staleness gate,
 // and it flips QuotaMode symmetrically with automatic switches, PD3); the
 // external-event adoption/pause is environment truth about who is running;
-// autopilot off blocks all automatic action; P2 gates on data quality; the
-// §7 settlement is bookkeeping independent of the action; P3–P6 pick the
-// action (money-before-time: a budget-exhausted B loses refuge candidacy);
+// P2 gates on data quality (also while the flee gate holds); the §7
+// settlement is bookkeeping independent of the action and keeps running while
+// paused (2026-11-17: P5 needs the ceiling); P3–P6 pick the action
+// (money-before-time: a budget-exhausted B loses refuge candidacy; the
+// directional flee gate blocks every switch-to-B path while B→A decides on);
 // P7 latches the one-shot warning onto Stay rounds only.
 func Evaluate(in Input) Decision {
 	// P1 手動最優先:不因任何自動規則或資料狀態被取消。
@@ -122,11 +127,7 @@ func Evaluate(in Input) Decision {
 	if d, ok := externalDecision(in.External); ok {
 		return d
 	}
-	// 自駕閘(枚舉釘死):關閉時本輪不做任何自動決策,非暫停模式。
-	if !in.AutopilotOn {
-		return Decision{Action: ActionNone, Reason: "自駕關閉,本輪不自動決策"}
-	}
-	// P2 資料品質閘:缺失/過期/當前帳號金鑰失效 → 本輪不決策。
+	// P2 資料品質閘:缺失/過期/當前帳號金鑰失效 → 本輪不決策(避難封鎖下照常)。
 	if d, gated := staleGate(in); gated {
 		return d
 	}
@@ -179,7 +180,7 @@ func manualDecision(in Input) (Decision, bool) {
 func externalDecision(e ExtEvent) (Decision, bool) {
 	switch e.Kind {
 	case "unknown_provider":
-		return Decision{Action: ActionPause, Reason: "外部切到未知供應商,暫停自動切換以待人工確認"}, true
+		return Decision{Action: ActionPause, Reason: "外部切到未知供應商,暫停自動切 B 以待人工確認"}, true
 	case "provider_changed":
 		return Decision{Action: ActionNone, Reason: "外部已切到認得的帳號,靜默採納,本輪不自動決策"}, true
 	}
@@ -419,11 +420,20 @@ func decideAction(in Input, budget BudgetState) Decision {
 }
 
 // decideFromA: P3 flee to B when A crossed a switch line and B is a usable
-// refuge; otherwise P6 arbitration when A is hot but B is not usable.
+// refuge; otherwise P6 arbitration when A is hot but B is not usable. The
+// directional flee gate (2026-11-17) blocks both switch-to-B paths while it
+// holds (paused autopilot, or 六日不自動切 B) and leaves an explicit blocked
+// stay on A — B→A returns are decided in decideFromB regardless of the gate.
 func decideFromA(in Input, budget BudgetState) Decision {
 	hot, why := aHot(in)
 	if !hot {
 		return idleStay()
+	}
+	if block, whyBlock := fleeBlocked(in); block {
+		return Decision{
+			Action: ActionStay,
+			Reason: fmt.Sprintf("%s;%s → 留守 A(封鎖)", why, whyBlock),
+		}
 	}
 	if bAvailable(in, budget) {
 		return Decision{
@@ -463,6 +473,23 @@ func decideFromB(in Input, budget BudgetState) Decision {
 		}
 	}
 	return idleStay()
+}
+
+// fleeBlocked is the directional A→B gate (2026-11-17 spec): it holds while
+// the autopilot is paused, or while noFleeOnWeekend is set AND the injected
+// Now (the loop's local machine time) falls on a Saturday/Sunday. It never
+// blocks B→A — P4/P5 in decideFromB evaluate normally — and manual commands
+// (P1) are decided before any gate.
+func fleeBlocked(in Input) (bool, string) {
+	if !in.AutopilotOn {
+		return true, "暫停自動切 B"
+	}
+	if in.Cfg.NoFleeOnWeekend {
+		if wd := in.Now.Weekday(); wd == time.Saturday || wd == time.Sunday {
+			return true, "六日不自動切 B"
+		}
+	}
+	return false, ""
 }
 
 // aHot reports whether A crossed either switch line (5h or weekly, inclusive

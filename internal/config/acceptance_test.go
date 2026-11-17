@@ -46,6 +46,9 @@ func TestDefaults(t *testing.T) {
 	if !c.AutoStart {
 		t.Fatal("autostart must default on")
 	}
+	if c.NoFleeOnWeekend {
+		t.Fatal("noFleeOnWeekend must default off (existing behavior unchanged)")
+	}
 	if len(c.Profiles) != 0 {
 		t.Fatalf("default must ship zero profiles (user fills A/B): %+v", c.Profiles)
 	}
@@ -72,6 +75,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	c.AutoStart = false
 	c.ProxyURL = "http://127.0.0.1:7890"
 	c.ParseFailAlertLimit = 7
+	c.NoFleeOnWeekend = true
 	c.Profiles = []domain.Profile{
 		{ID: "A", Name: "team shared", APIKey: "key-a", BaseURL: "https://api.z.ai/api/anthropic",
 			ModelEnv: map[string]string{
@@ -102,6 +106,22 @@ func TestLoadMissingFileGivesDefaults(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, config.Default()) {
 		t.Fatalf("missing file must yield defaults: %+v", got)
+	}
+}
+
+// 郵線鍵名釘死(審計 F11):往返測試用 struct 兩側封送,抓不到 tag 寫錯;
+// 手寫 JSON 只帶鍵名 `noFleeOnWeekend`,Load 必須吃進 NoFleeOnWeekend=true。
+func TestNoFleeOnWeekendWireKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := write(path, `{"noFleeOnWeekend":true}`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !got.NoFleeOnWeekend {
+		t.Fatalf("wire key noFleeOnWeekend must decode into NoFleeOnWeekend: %+v", got)
 	}
 }
 
