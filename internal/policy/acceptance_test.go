@@ -385,12 +385,29 @@ func TestAutopilotOff(t *testing.T) {
 	}
 }
 
-// --- 配速數學:七段結算鏈(審計 A1 重寫:驅動真引擎,恆等式=總量恰 90、逐日 ≤90) ---
-
+// --- 配速數學:七段結算鏈(審計 A1 重寫:驅動真引擎;2026-11-19 D1/D2 改版
+//
+//	重推:天數含重置日 [today, 重置日]、邊界鏈貼錨點鐘點 15:00) ---
+//
+// 乾淨週從週五 16:00 起(剛過週錨 15:00),天天燒到天花板,邊界逐日 +24h。
+// 新語意逐段推導(總量 90、只數工作日、含頭含尾;錨點採納 B 的重置=週五
+// 11-27 15:00,故逐日視窗以 11-27 為尾):
+//
+//	d0 週五 11-20:[五20,五27] 含頭尾工作日 = 五20,一23,二24,三25,四26,五27 = 6
+//	    → 90/6        = 15   → 天花板 15
+//	d1 週六 11-21:[六21,五27] 工作日 = 一~五 = 5 → (90−15)/5  = 15  → 30
+//	d2 週日 11-22:[日22,五27] 工作日 = 一~五 = 5 → (90−30)/5  = 12  → 42
+//	d3 週一 11-23:[一23,五27] 工作日 = 5        → (90−42)/5  = 9.6 → 51.6
+//	d4 週二 11-24:[二24,五27] 工作日 = 4        → (90−51.6)/4 = 9.6 → 61.2
+//	d5 週三 11-25:[三25,五27] 工作日 = 3        → (90−61.2)/3 = 9.6 → 70.8
+//	d6 週四 11-26:[四26,五27] 工作日 = 2        → (90−70.8)/2 = 9.6 → 80.4
+//	(9.6 = 48/5 非二進制精確值 → 全程 1e-9 容差。)
+//
+// 恆等式的新意義(D1):最後一次重置前結算(週四)把餘量對半切——一天用、
+// 一天留給重置日晨間切片;該晨間額度隨週重置作廢 → 尾差 90−80.4 = 9.6
+// = 重置日晨間留量,是刻意不燒完的安全餘裕(不再恰等於總量)。
 func TestPacingIdentitySevenSettlements(t *testing.T) {
-	// 乾淨週從週五 16:00 起(剛過週錨),天天燒到天花板,邊界逐日 +24h。
-	// 期望天花板序列:18, 36, 49.5, 59.625, 69.75, 79.875, 90(全部可被 binary 精確表示)。
-	want := []float64{18, 36, 49.5, 59.625, 69.75, 79.875, 90}
+	want := []float64{15, 30, 42, 51.6, 61.2, 70.8, 80.4}
 
 	budget := policy.BudgetState{
 		WeekAnchorTime: anchorFri15(),
@@ -413,7 +430,7 @@ func TestPacingIdentitySevenSettlements(t *testing.T) {
 		if d.Budget == nil {
 			t.Fatalf("day %d: settlement must fire (now=%v boundary=%v)", i, now, *budget.DayBoundary)
 		}
-		if got := derefP(d.Budget.CeilingToday); got != w {
+		if got := derefP(d.Budget.CeilingToday); math.Abs(got-w) > 1e-9 {
 			t.Fatalf("day %d: ceiling = %v, want %v (dayStart=%v)", i, got, w, derefP(d.Budget.DayStartWeekly))
 		}
 		if got := derefP(d.Budget.CeilingToday); got > 90+1e-9 {
@@ -422,13 +439,17 @@ func TestPacingIdentitySevenSettlements(t *testing.T) {
 		budget = *d.Budget
 		now = now.Add(24 * time.Hour)
 	}
-	// 末段:總量恰 90。
-	if last := derefP(budget.CeilingToday); last != 90 {
-		t.Fatalf("identity must land exactly on weekly total: %v", last)
+	// 末段恆等(新語意):總量 − 末天花板 = 重置日晨間留量 = 最後一次結算的
+	// 當日配額((90−70.8)/2 = 9.6,餘量對半切的另一半)。
+	last := derefP(budget.CeilingToday)
+	headroom := (90.0 - want[len(want)-2]) / 2.0
+	if math.Abs((90.0-last)-headroom) > 1e-9 {
+		t.Fatalf("identity: 90−last=%v must equal the reset-day-morning headroom %v", 90.0-last, headroom)
 	}
 }
 
-// 週三結算:基準更新、daysLeft=[三,五)=2、邊界+24h;恰好卡在邊界時刻也觸發(≥ 含等於,審計 M7)。
+// 週三結算:基準更新、daysLeft=[三,五] 含重置日=3、邊界貼錨點鐘點(此例 +24h
+// 同值 thu15);恰好卡在邊界時刻也觸發(≥ 含等於,審計 M7)。
 func TestSettlementWednesday(t *testing.T) {
 	b := snap("B", f(5), f(30), 0, wed15)
 	budget := policy.BudgetState{WeekAnchorTime: anchorFri15(), DayBoundary: &wed15, DayStartWeekly: f(25.5), CeilingToday: f(50)}
@@ -439,8 +460,8 @@ func TestSettlementWednesday(t *testing.T) {
 	if derefP(d.Budget.DayStartWeekly) != 30.0 {
 		t.Fatalf("new day baseline = current weekly: %v", derefP(d.Budget.DayStartWeekly))
 	}
-	if derefP(d.Budget.CeilingToday) != 60.0 {
-		t.Fatalf("ceiling = 30+(90-30)/2=60: %v", derefP(d.Budget.CeilingToday))
+	if derefP(d.Budget.CeilingToday) != 50.0 {
+		t.Fatalf("ceiling = 30+(90-30)/3=50([三,四,五] 含重置日 3 個工作日): %v", derefP(d.Budget.CeilingToday))
 	}
 	if !d.Budget.DayBoundary.Equal(thu15) {
 		t.Fatalf("next boundary = +24h: %v want %v", d.Budget.DayBoundary, thu15)
@@ -462,15 +483,16 @@ func TestSettlementNewWeekAfterAnchor(t *testing.T) {
 	if d.Budget == nil {
 		t.Fatalf("weekly reset crossing must settle: %+v", d)
 	}
-	if derefP(d.Budget.CeilingToday) != 18.0 {
-		t.Fatalf("clean week: 90/5=18: %v", derefP(d.Budget.CeilingToday))
+	if derefP(d.Budget.CeilingToday) != 15.0 {
+		t.Fatalf("clean week: 90/6=15([五20,五27] 含頭尾 6 個工作日): %v", derefP(d.Budget.CeilingToday))
 	}
 	if d.Budget.WeekAnchorTime == nil || !d.Budget.WeekAnchorTime.Equal(nextFri) {
 		t.Fatalf("anchor must adopt B's new reset: %v", d.Budget.WeekAnchorTime)
 	}
 }
 
-// 週六結算:假日排除 4 天 vs 勾假日 6 天(審計算術:allowance 17.5 / 11.6667)。
+// 週六結算:假日排除 5 天(一~五)vs 日曆 7 天([六21,五27] 含頭尾,錨點
+// 已過 → 前滾一週至 11-27;審計算術:allowance 14 / 10)。
 func TestSettlementWeekendWorkdaysOnly(t *testing.T) {
 	run := func(workdaysOnly bool) policy.Decision {
 		now := sat15.Add(time.Minute)
@@ -483,16 +505,17 @@ func TestSettlementWeekendWorkdaysOnly(t *testing.T) {
 			Budget: budget, Cfg: cfg, AutopilotOn: true,
 		})
 	}
-	if d := run(true); d.Budget == nil || derefP(d.Budget.CeilingToday) != 37.5 {
-		t.Fatalf("workdays-only: ceiling=20+(70/4)=37.5: %+v", d.Budget)
+	if d := run(true); d.Budget == nil || derefP(d.Budget.CeilingToday) != 34.0 {
+		t.Fatalf("workdays-only: ceiling=20+(70/5)=34: %+v", d.Budget)
 	}
-	// 95/3 非浮點可精確表示:測試常數(編譯期精確算術)與實作執行期運算必差 1 ulp → 容差比較。
-	if d := run(false); d.Budget == nil || math.Abs(derefP(d.Budget.CeilingToday)-190.0/6.0) > 1e-9 {
-		t.Fatalf("weekends counted: ceiling=20+(70/6)=31.6667: %+v", d.Budget)
+	// 70/7=10 皆二進制可精確表示 → 精確比較。
+	if d := run(false); d.Budget == nil || derefP(d.Budget.CeilingToday) != 30.0 {
+		t.Fatalf("weekends counted: ceiling=20+(70/7)=30: %+v", d.Budget)
 	}
 }
 
-// 保底+夾牆:daysLeft=1 建構(結算點=週五 14:01,錨點日=當日 → 區間 0 日 → 夾底 1)。
+// 保底+夾牆:daysLeft=1(結算點=週五 14:01,錨點日=當日 → D1 含頭含尾恰
+// 1 日,真值而非夾底;斷言數值兩種語意相同)。
 func TestBudgetFloorAndWallClamp(t *testing.T) {
 	settle := func(dayStart, weekly float64) policy.Decision {
 		now := fri14.Add(time.Minute)
@@ -537,8 +560,9 @@ func TestColdStart(t *testing.T) {
 	if d.Budget == nil {
 		t.Fatalf("cold start must settle immediately: %+v", d)
 	}
-	if derefP(d.Budget.DayStartWeekly) != 10.0 || derefP(d.Budget.CeilingToday) != 50.0 {
-		t.Fatalf("cold: baseline 10, ceiling 10+(90-10)/2=50: %+v", d.Budget)
+	if derefP(d.Budget.DayStartWeekly) != 10.0 ||
+		math.Abs(derefP(d.Budget.CeilingToday)-(10.0+80.0/3.0)) > 1e-9 {
+		t.Fatalf("cold: baseline 10, ceiling 10+(90-10)/3≈36.6667(days=[三,四,五] 含重置日): %+v", d.Budget)
 	}
 	if d.Budget.DayBoundary == nil || !d.Budget.DayBoundary.Equal(wed15) {
 		t.Fatalf("cold next boundary = today at anchor clock (Wed 15:00): %v", d.Budget.DayBoundary)

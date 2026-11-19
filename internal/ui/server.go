@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"time"
 
 	"cc-fuse/internal/config"
 	"cc-fuse/internal/domain"
@@ -42,7 +43,9 @@ type Server struct {
 // autopilot is on, the health flags the page surfaces, and each slot's
 // latest quota snapshot. Profiles carries the A/B definitions so the page
 // can render names and URLs. CeilingToday + EnforceDailyCeiling feed B's
-// 今日天花板 card line and its 強制/不強制 annotation (2026-11-16 plan R1/R2).
+// ceiling chip and its 強制/不強制 annotation (2026-11-16 plan R1/R2);
+// Until carries the next cut-off instant so the chip can prefix
+// "Until …" (2026-11-19 D3a).
 type StatusView struct {
 	Current             string                `json:"current"`
 	Autopilot           bool                  `json:"autopilot"`
@@ -54,6 +57,7 @@ type StatusView struct {
 	Profiles            []domain.Profile      `json:"profiles"`
 	CeilingToday        *float64              `json:"ceilingToday"`        // B's pacing ceiling for today (null = not settled)
 	EnforceDailyCeiling bool                  `json:"enforceDailyCeiling"` // ceiling-forced-switch toggle state
+	Until               *time.Time            `json:"until,omitempty"`     // next settlement/cut-off instant (BudgetState.DayBoundary; nil → key omitted)
 }
 
 // NewServer builds the settings API handler over cfg (the app's live config

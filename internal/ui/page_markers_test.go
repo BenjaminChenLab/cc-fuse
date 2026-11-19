@@ -15,7 +15,7 @@ func TestPageBudgetMarkers(t *testing.T) {
 	html := indexHTML
 	for _, m := range []string{
 		"bEnforce",       // 勾選框 id(B 配速預算區)
-		"今日天花板",          // B 卡天花板行
+		"天花板 週",          // B 卡天花板行(2026-11-19 D3:cut-off 講法,「今日天花板」退場)
 		"到點強制切回 A",       // 開啟時的標註
 		"不強制",            // 關閉時的標註
 		"恢復預計",           // A 卡恢復時間行(只看 5h)

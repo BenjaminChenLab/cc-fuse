@@ -20,7 +20,7 @@ const indexHTML = `<!doctype html>
  h2{font-size:16px;letter-spacing:2px;font-weight:600;color:var(--muted);margin:26px 0 12px;user-select:none}
  fieldset{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px 18px;margin-bottom:14px}
  legend{color:var(--accent);font-weight:600;font-size:14px;padding:0 8px}
- label{display:inline-block;min-width:170px;color:var(--text);cursor:help}
+ label{display:inline-block;width:190px;color:var(--text);cursor:help}
  input{background:var(--card2);color:var(--text);border:1px solid var(--border2);border-radius:8px;padding:7px 10px;font-size:15px}
  input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.18)}
  input[type=text]{width:340px}
@@ -159,7 +159,7 @@ var I18N={
   tipProxy:"查詢額度 API 用的 HTTP proxy 網址;留空=直連。",
   tipAuto:"存檔時立即寫入/移除登錄檔 Run 機碼:開機自動啟動 cc-fuse。",
   active:"使用中",switchBtn:"切換",switchTip:"手動切換(P1 最優先,立即生效)",
-  ceilingChip:"今日天花板 週",enforceNote:"到點強制切回 A",noEnforceNote:"不強制",recoveryChip:"恢復預計 ",
+  ceilingChip:"天花板 週",untilPrefix:"到",untilSuffix:" 前:",leftLabel:"尚可 %spt",enforceNote:"到點強制切回 A",noEnforceNote:"不強制",recoveryChip:"恢復預計 ",
   hintAutoOn:"自動切 B:開",hintAutoOff:"自動切 B:已暫停(切回 A 照常)",hintStale:"額度資料過期",
   hintKeyDead:"目前帳號 key 失效(401/403)",hintParse:"連續解析失敗(紅燈)",
   apPause:"暫停自動切 B",apResume:"恢復自動切 B",apPauseTip:"暫停自動切 B(手動切換仍可用;A 恢復或 B 燒到當日天花板仍會自動切回 A)",apResumeTip:"恢復自動切 B",
@@ -204,7 +204,7 @@ var I18N={
   tipProxy:"HTTP proxy URL for the quota API; empty = direct connection.",
   tipAuto:"On save, writes/removes the registry Run key that launches cc-fuse at logon.",
   active:"Active",switchBtn:"Switch",switchTip:"Manual switch (P1 top priority, immediate)",
-  ceilingChip:"Today's ceiling wk ",enforceNote:"forces switch back to A",noEnforceNote:"info only",recoveryChip:"Recovery est. ",
+  ceilingChip:"ceiling wk ",untilPrefix:"Until ",untilSuffix:": ",leftLabel:"%spt left ",enforceNote:"forces switch back to A",noEnforceNote:"info only",recoveryChip:"Recovery est. ",
   hintAutoOn:"Auto-flee to B: on",hintAutoOff:"Auto-flee to B: paused (returns to A still work)",hintStale:"quota data stale",
   hintKeyDead:"current key dead (401/403)",hintParse:"sustained parse failures",
   apPause:"Pause auto-flee",apResume:"Resume auto-flee",apPauseTip:"Pause the automatic flee to B (manual switching still works; recovery and ceiling returns to A still apply)",apResumeTip:"Resume the automatic flee to B",
@@ -242,6 +242,15 @@ function fill(p,pre){
 }
 function initials(n){n=(n||"").trim();if(!n)return"?";var w=n.split(/\s+/);var s=w.length>1?(w[0][0]+w[1][0]):n.slice(0,2);return s.toUpperCase()}
 function fmtCD(ms){if(ms==null||ms<=0)return"";var m=Math.round(ms/60000);if(m<1)return"<1m";if(m<60)return m+"m";var h=Math.floor(m/60);if(h<48)return h+"h"+(m%60?(""+(m%60)+"m"):"");var d=Math.floor(h/24);return d+"d"+(h%24)+"h"}
+// 下一個 cut-off 瞬間(payload 的 s.until)→「週五 14:57」/「Fri 14:57」:
+// 短星期 + HH:MM 本機時間去秒,執行期由 JS 以 locale 呼叫渲染(靜態頁不含字面)。
+function fmtCutoff(iso){
+ var d=new Date(iso);
+ var loc=(lang==="zh")?"zh-TW":"en-US";
+ var wd=d.toLocaleDateString(loc,{weekday:"short"});
+ var hm=d.toLocaleTimeString(loc,{hour:"2-digit",minute:"2-digit",hour12:false});
+ return wd+" "+hm;
+}
 function pctCls(v){if(v==null)return"";return v>=90?"bad":(v>=70?"warn":"good")}
 function api(method,url,body,cb){
  var x=new XMLHttpRequest();
@@ -290,11 +299,19 @@ function buildCard(slot,p,snap,s){
  meta.appendChild(ur);
  meta.appendChild(quotaBar("5h",snap?snap.fiveHourPct:null,snap?snap.fiveHourReset:null));
  meta.appendChild(quotaBar("7d",snap?snap.weeklyPct:null,snap?snap.weeklyReset:null));
- // B 卡:今日天花板(R1)——開=到點強制切回 A、關=不強制;未結算過則整行不建。
+ // B 卡天花板 chip(R1;2026-11-19 D3 改 cut-off 講法)——前綴「到下一個結算
+ // 瞬間前」(payload s.until,D3a;缺 → 無前綴),天花板後加「尚可燒量 =
+ // 天花板 − 週已用」段(pt 一位小數、下限 0;天花板或週% 缺任一 → 不加該段);
+ // 開=到點強制切回 A、關=不強制;未結算過(ceilingToday 缺)則整行不建。
  if(slot==="B"&&s.ceilingToday!=null){
   var note=s.enforceDailyCeiling?t("enforceNote"):t("noEnforceNote");
   var chip=document.createElement("span");chip.className="chip";
-  chip.textContent=t("ceilingChip")+s.ceilingToday.toFixed(1)+"%("+note+")";
+  var txt="";
+  if(s.until!=null){txt+=t("untilPrefix")+fmtCutoff(s.until)+t("untilSuffix")}
+  txt+=t("ceilingChip")+s.ceilingToday.toFixed(1)+"%";
+  if(s.b&&s.b.weeklyPct!=null){txt+=" · "+t("leftLabel").replace("%s",Math.max(0,s.ceilingToday-s.b.weeklyPct).toFixed(1))}
+  txt+="("+note+")";
+  chip.textContent=txt;
   meta.appendChild(chip);
  }
  // A 卡:恢復預計(R3,只看 5h 重置;週窗口也超標時此估計偏樂觀,使用者已知悉)。

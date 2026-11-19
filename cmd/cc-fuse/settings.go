@@ -194,6 +194,7 @@ func startSettingsServer(loop *app.Loop, cfgPath string, logger *log.Logger) (st
 				A: st.A, B: st.B, Profiles: loop.ProfilesCopy(),
 				CeilingToday:        st.CeilingToday,
 				EnforceDailyCeiling: loop.ConfigCopy().Budget.EnforceDailyCeiling,
+				Until:               st.Until,
 			}
 		},
 		func(target string) { loop.SetManual(target) },

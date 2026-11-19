@@ -105,7 +105,7 @@ func TestToggleOff_P6ComparesResets(t *testing.T) {
 // --- R4:RefreshBudget(定稿語意) ---
 
 // 重算:改總量 90→60 → 天花板換新;基準/日界/錨點不動;不需 B 快照。
-// 天數=2(週三、週四;daysLeftInWindow 數到 midnight(錨點),週五當天不算)。
+// 天數=3(2026-11-19 D1 含頭含尾:週三~週五重置日;ref=日界 thu15−24h=週三 15:00)。
 func TestRefreshBudget_RecomputeNewTotal(t *testing.T) {
 	in := policy.Input{
 		Now: wed16, Budget: settledBudget(55), Cfg: cfgWith(60, true),
@@ -115,7 +115,7 @@ func TestRefreshBudget_RecomputeNewTotal(t *testing.T) {
 	if !ok {
 		t.Fatalf("重算路徑必須可算(不需 B 快照)")
 	}
-	exp := 20.0 + (60.0-20.0)/2.0
+	exp := 20.0 + (60.0-20.0)/3.0
 	if math.Abs(derefP(got.CeilingToday)-exp) > 1e-9 {
 		t.Fatalf("ceiling = %v, want %v", derefP(got.CeilingToday), exp)
 	}
@@ -144,7 +144,7 @@ func TestRefreshBudget_IntraDayIdempotent(t *testing.T) {
 
 // 日中不放寬性質:結算後同一預算日內任何時刻重存(設定不變)→ 天花板 ≤ 結算值(此例恆等)。
 func TestRefreshBudget_NeverRelaxes(t *testing.T) {
-	settled := 20.0 + (90.0-20.0)/2.0 // 結算於 wed15:剩 2 個預算日(週三、週四)
+	settled := 20.0 + (90.0-20.0)/3.0 // 結算於 wed15:剩 3 個預算日(週三~週五,2026-11-19 D1 含重置日)
 	for _, now := range []time.Time{wed16, wed23_50, thu00_10, thu14_59} {
 		st, ok := policy.RefreshBudget(policy.Input{
 			Now: now, Budget: settledBudget(settled), Cfg: cfgWith(90, true),
@@ -167,15 +167,15 @@ func TestRefreshBudget_WorkdaysFlipSameDay(t *testing.T) {
 	budget := policy.BudgetState{
 		WeekAnchorTime: &nextFri, DayBoundary: &sat15, DayStartWeekly: f(10), CeilingToday: f(26),
 	}
-	c := config.Default() // WorkdaysOnly=true(5 天:五、一~四)
+	c := config.Default() // WorkdaysOnly=true([五20,五27] 含頭尾 6 個工作日,D1)
 	c.Budget.EnforceDailyCeiling = true
 	got, ok := policy.RefreshBudget(policy.Input{Now: fri16, Budget: budget, Cfg: c})
-	if !ok || math.Abs(derefP(got.CeilingToday)-26) > 1e-9 {
-		t.Fatalf("同設定重算應保持 10+80/5=26:%v ok=%v", derefP(got.CeilingToday), ok)
+	if !ok || math.Abs(derefP(got.CeilingToday)-(10.0+80.0/6.0)) > 1e-9 {
+		t.Fatalf("同設定重算應保持 10+80/6≈23.333:%v ok=%v", derefP(got.CeilingToday), ok)
 	}
-	c.Budget.WorkdaysOnly = false // 改成日曆天(7 天)→ 當天生效
+	c.Budget.WorkdaysOnly = false // 改成日曆天([五20,五27] 含頭尾 8 天)→ 當天生效
 	got, ok = policy.RefreshBudget(policy.Input{Now: fri16, Budget: budget, Cfg: c})
-	exp := 10.0 + (90.0-10.0)/7.0
+	exp := 10.0 + (90.0-10.0)/8.0
 	if !ok || math.Abs(derefP(got.CeilingToday)-exp) > 1e-9 {
 		t.Fatalf("工作日開關當天生效:ceiling=%v want %v ok=%v", derefP(got.CeilingToday), exp, ok)
 	}
@@ -202,8 +202,8 @@ func TestRefreshBudget_ColdStartFresh(t *testing.T) {
 	if got.WeekAnchorTime == nil || !got.WeekAnchorTime.Equal(fri15) {
 		t.Fatalf("錨點=B 的下個重置:%+v", got.WeekAnchorTime)
 	}
-	if math.Abs(derefP(got.CeilingToday)-90) > 1e-9 { // 25+(90−25)/1
-		t.Fatalf("ceiling=90:%v", derefP(got.CeilingToday))
+	if math.Abs(derefP(got.CeilingToday)-57.5) > 1e-9 { // 25+(90−25)/2(週四+週五重置日,D1)
+		t.Fatalf("ceiling=57.5:%v", derefP(got.CeilingToday))
 	}
 }
 
@@ -251,17 +251,18 @@ func TestRefreshBudget_NilGuard(t *testing.T) {
 }
 
 // 複審突變1:重算路徑的每日保底與 100% 硬牆(公式複本,先前零覆蓋 —
-// 同時刪掉兩者測試照綠)。
+// 同時刪掉兩者測試照綠)。2026-11-19 D1:ref 週三 → 天數=3(含重置日)。
 func TestRefreshBudget_RecomputeFloorAndWall(t *testing.T) {
-	// 保底:基準 88、總量 90、剩 2 天 → 平均 1% < 保底 3% → 天花板 91。
+	// 保底:基準 88、總量 90、剩 3 天 → 平均 0.67% < 保底 3% → 天花板 91。
 	budget := policy.BudgetState{WeekAnchorTime: anchorFri15(), DayBoundary: &thu15, DayStartWeekly: f(88)}
 	got, ok := policy.RefreshBudget(policy.Input{Now: wed16, Budget: budget, Cfg: cfgWith(90, true)})
 	if !ok || math.Abs(derefP(got.CeilingToday)-91) > 1e-9 {
 		t.Fatalf("每日保底應墊到 3(天花板 91):ceiling=%v ok=%v", derefP(got.CeilingToday), ok)
 	}
-	// 硬牆:基準 30、總量 200 → 平均 85 → 30+85=115 → 封 100。
+	// 硬牆:基準 30、總量 300(D1 後天數 3,總量須 >240 牆才會越過 100)
+	// → 平均 (300−30)/3=90 → 30+90=120 → 封 100。
 	budget2 := policy.BudgetState{WeekAnchorTime: anchorFri15(), DayBoundary: &thu15, DayStartWeekly: f(30)}
-	got2, ok2 := policy.RefreshBudget(policy.Input{Now: wed16, Budget: budget2, Cfg: cfgWith(200, true)})
+	got2, ok2 := policy.RefreshBudget(policy.Input{Now: wed16, Budget: budget2, Cfg: cfgWith(300, true)})
 	if !ok2 || derefP(got2.CeilingToday) != 100 {
 		t.Fatalf("100 真牆必須封頂:ceiling=%v ok=%v", derefP(got2.CeilingToday), ok2)
 	}

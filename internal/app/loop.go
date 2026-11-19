@@ -267,8 +267,9 @@ func (l *Loop) NextDelay(current string, a, b *domain.QuotaSnapshot) time.Durati
 
 // Status snapshots the runtime facts the tray needs to render icon/tooltip
 // (design §8) without poking Loop internals directly. CeilingToday carries
-// the persisted pacing ceiling so the switcher cards can show B's "今日
-// 天花板" line (2026-11-16 plan R1).
+// the persisted pacing ceiling so the switcher cards can show B's ceiling
+// chip (2026-11-16 plan R1); Until carries the persisted day boundary (the
+// next cut-off instant, 2026-11-19 D3a) so the chip can prefix "Until …".
 type Status struct {
 	Current      string                // "A"/"B"/""
 	Autopilot    bool                  // false = paused
@@ -277,6 +278,7 @@ type Status struct {
 	ParseFailing bool                  // consecutive parse failures reached the alert limit (PD2 red)
 	A, B         *domain.QuotaSnapshot // last good sample per account (nil = none yet)
 	CeilingToday *float64              // B's pacing ceiling for today (nil = not settled yet)
+	Until        *time.Time            // next settlement/cut-off instant = BudgetState.DayBoundary (nil = never settled)
 }
 
 // Status returns the current render inputs; safe to call from the tray
@@ -291,6 +293,7 @@ func (l *Loop) Status() Status {
 		A:            l.cache["A"],
 		B:            l.cache["B"],
 		CeilingToday: l.Budget.CeilingToday,
+		Until:        l.Budget.DayBoundary,
 	}
 	cur := st.A
 	if l.Current == "B" {

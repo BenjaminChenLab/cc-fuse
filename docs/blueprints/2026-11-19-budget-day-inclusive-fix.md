@@ -1,0 +1,109 @@
+# 需求文件:B 配速預算天數語意修正(含重置日)+ 顯示如實化
+
+- 日期:2026-11-19
+- 狀態:settled(與使用者討論定案,使用者已核准開工)
+- 單元名:`budget-day-inclusive`
+
+## 背景(現況與實證)
+
+cc-fuse 的 B 帳號「配速預算」把週預算總量(例 95%)按每日結算均分:每天結算時
+`天花板 = 日始週%基準 + max((週預算總量 − 基準) ÷ 剩餘預算日, 每日保底)`。
+程式在 `internal/policy/policy.go`:`daysLeftInWindow`(剩餘天數)、
+`settleBudget`(每日結算)、`nextBoundary`(下一次結算時刻)、`RefreshBudget`(存檔即時重算)。
+
+2026-11-19(週四)實測(來源 `%APPDATA%\cc-fuse\state.json`,已驗證):
+`DayStartWeekly=64`、`WeekAnchorTime=2026-11-20T14:57(週五)`、`CeilingToday=95`、
+`DayBoundary=2026-11-20T00:00`。B 週已用 71%。
+
+兩個問題:
+
+1. **重置日被排除,最後一個預算日吃掉全部剩餘額度。**`daysLeftInWindow` 數
+   「今天(含)到重置日(不含)」,週五(重置日)整日不算 → 週四結算得
+   days=1 → 天花板 = 64 + (95−64)÷1 = 95。若週四真燒到 95,週五早上只剩
+   「每日保底 3%」的殘量,B 失去避難所資格,要乾等到 14:57 週重置。
+2. **每日結算時刻卡死在午夜 00:00。**`nextBoundary` 給「舊日界+24h」較高優先權,
+   錨點鐘點只在第一次冷啟動(無日界紀錄)時用一次;這條鏈當初在查不到重置時間時
+   以 00:00 開跑,之後永久沿用,即使錨點(14:57)已知。設計文件
+   `docs/blueprints/2026-11-15-cc-fuse-design.md` §「預算週錨定」明寫:結算時刻
+   跟週重置鐘點(例:週五 15:00 重置 → 每天 15:00 結算,**不用 00:00**),
+   00:00 只是查不到重置時間的備案。
+
+## 需求原文(使用者,2026-11-19)
+
+> 「這東西的目的是不讓重置前沒 quota 用, 所以要剩餘日平均分配. 照 95 今天用掉,
+> 豈不明天沒得用?? 這不對」
+
+## 定案(使用者核准「ok go」,全批執行)
+
+語意模型(使用者 2026-11-19 追加澄清,逐字):
+「比如, 週四今天早上, 說到15:00 前能用到多少, 用的是 web 1500 to thu 1500 quota.
+過了 thu 1500, 說 到fri 1500 能用到多少」(補正:時刻以實際偵測的重置瞬間 14:57 為準,
+不取整)— 即:額度陳述永遠綁定「上一個 cut-off → 下一個 cut-off」的切片,
+每日額度 = 該切片的配額,最後一切片到週重置瞬間為止。此語意與 D1+D2 的引擎行為一致,
+D3/D3a 把顯示講法對齊(不用「今日/today」,用「到下一個 cut-off 前」)。
+
+- **D1 天數含重置日(含頭含尾)**:`daysLeftInWindow` 改數
+  `[today, anchorDate]` 含 anchor 當日(重置日是一個預算日,它的額度涵蓋重置時刻前的早上)。
+  workdaysOnly 與「永不小於 1」的夾限(clamp)語意不變。
+- **D2 結算時刻貼回錨點鐘點**:`nextBoundary` 改為錨點優先 — 只要週重置錨點已知,
+  下一次結算 = 今天錨點鐘點(已過則 +24h 一次),不再讓「舊日界+24h」的鏈把
+  00:00 永久沿用;錨點未知時維持現狀(有日界 → 舊+24h,無 → 當日午夜)。
+- **D3 B 卡天花板 chip 改用 cut-off 講法並加顯示尚可燒量**:chip 前綴下一個
+  cut-off 時刻,不再用「今日/today」字眼;並加一段 `ceiling − 週已用`
+  (pt,一位小數,下限 0)。顯示格式(時刻 = 下一個結算/cut-off 瞬間,見 D3a;
+  星期用短寫、HH:MM 本機時間去秒,實際錨點例如 14:57,不取整):
+  EN:`Until Fri 14:57: ceiling wk 79.5% · 8.5pt left (forces switch back to A)`;
+  zh:`到週五 14:57 前:天花板 週79.5% · 尚可 8.5pt(到點強制切回 A)`。
+  cut-off 時刻未知時省略前綴(呈現 `ceiling wk X% · Ypt left` 無 today 字眼的形態)。
+  只改顯示,不改切換邏輯;`ceilingToday` 或週% 缺任一時不加「尚可」段(維持現狀);
+  chip 整行在 `ceilingToday==null` 時不建(既有規則不變)。
+- **D3a status payload 帶下一個 cut-off 時刻**:/api/status 的 B 卡資料新增
+  下一個結算瞬間(來源 `BudgetState.DayBoundary`;nil → 不帶此欄),
+  前端據此渲染 D3 的「Until …」前綴。
+- **D4 UI 標籤欄對齊**:`internal/ui/page.go` CSS `label{min-width:170px}` 改
+  `label{width:190px}`(固定寬;最長英文標籤 "No auto-flee on weekends" 約 175px,
+  放得下;所有輸入框/開關同一條 x 起點)。
+- **D5 文件回寫**:設計文件 `2026-11-15-cc-fuse-design.md` 的公式/天數/結算時刻
+  段落由 supervisor 層回寫(舊文刪線保留),本檔為需求事實來源。
+
+## 驗收語意(驗收測試須釘死;例子用 2026-11-19 真實日期)
+
+- A1 daysLeftInWindow(now=週四 11-19, anchor=週五 11-20 14:57, workdays=true)
+  **= 2**(舊=1;含週五)。
+- A2 同週週一(now=11-16, 同 anchor)= **5**(一~五;舊=4)。
+- A3 週末排除與夾限不變:anchor=週六、now=週五、workdays=true → 1;
+  now=週六、anchor=週日(全週末)→ 0 → 夾成 1;workdays=false 時含頭含尾照數
+  (now=週四、anchor=週六 → 3)。
+- A4 settleBudget:基準 64、總量 95、days=2 → 天花板 **79.5**;days=1 → 95
+  (每日保底、hardWall 100 夾限邏輯不變)。
+- A5 nextBoundary 三態:①既有午夜日界 + 已知錨點 → 貼錨點鐘點
+  (now=週四 00:00 後、錨點 14:57 → 下一界 = 當日 14:57;已過 14:57 → +24h);
+  ②錨點 nil + 有日界 → 舊+24h(維持);③兩者皆 nil → 當日午夜(維持)。
+- A6 RefreshBudget 重算路徑走同一個 daysLeftInWindow:ref=日界−24h,
+  本例重算今日天花板 = 79.5(收緊現狀 95;「日中不放寬」針對同公式重算,
+  公式改版造成的收緊是本需求要的效果)。
+- A7 UI chip:ceiling=79.5、週已用 71、DayBoundary=週五 14:57 → 顯示
+  EN `Until Fri 14:57: ceiling wk 79.5% · 8.5pt left …` /
+  zh「到週五 14:57 前:天花板 週79.5% · 尚可 8.5pt …」;
+  週已用 ≥ 天花板 → 尚可顯示 0.0;DayBoundary 缺 → 無前綴;
+  缺資料時不加「尚可」段、ceilingToday 缺時整行不建(既有)。
+- A8 CSS:label 固定 190px(以字串標記檢查嵌入式 HTML 為準)。
+
+## 範圍與約束
+
+- 產品碼:`internal/policy/policy.go`(D1、D2)、`internal/ui/page.go`(D3、D4)、`internal/ui/server.go`、`internal/app/loop.go`、`cmd/cc-fuse/settings.go`(D3a;~~未列~~ 2026-11-19 實作期補列 — 修訂版 D3a 實際觸及)。
+- 不新增設定欄位(所有數字皆已可設定);不碰 DB;不碰切換決策 P3–P6 的語意
+  (bAvailable/天花板比較邏輯不變,只有天花板「數值」隨天數語意變化)。
+- 既有測試是回歸牆:斷言舊天數語意的測試按新契約演進更新 — 一次一檔、
+  斷言語意不變形,每處改動在報告列理由。
+- 回歸範圍:internal/policy、internal/app(budgetrefresh/budgetmerge)、
+  internal/ui(budgetview/status/page markers)相關套件測試全綠 +
+  `go build ./...`、`go vet ./...` 乾淨。
+- 全鏈零 git 寫入;使用者手動收尾 commit。
+
+## 已接受的殘留風險(記錄用,非待辦)
+
+- 佈署當下已存在的午夜日界:升級後第一次結算會把鏈貼回錨點鐘點;當天天花板
+  要等那次結算或使用者按一次 Save(RefreshBudget)才會以新語意重算(使用者已知悉)。
+- 結算時刻貼到 14:57 後,該筆結算貼著週重置瞬間:快照新鮮度閘(≤ staleAfterMin)
+  決定它讀到重置前或重置後的值,單一片額度可能有一次過渡性雜訊,下次結算自癒。

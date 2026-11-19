@@ -252,12 +252,14 @@ const hardWallPct = 100.0
 
 // settleBudget runs the §7 daily settlement. It fires when Now crossed the
 // persisted day boundary (or on cold start) and B carries a usable weekly%.
-// Rules: the next boundary is old+24h (cold start: today at the anchor clock
-// time, rolled to tomorrow when already past); DayStartWeekly re-anchors to
-// the CURRENT B weekly% (a mid-day drop never relaxes today's ceiling — the
-// boundary has not moved); allowance = max((weeklyTotal−dayStart)/daysLeft,
-// minDaily); ceiling = min(dayStart+allowance, hardWallPct); the newest
-// observed weekly reset is adopted as the anchor; the P7 latch carries over.
+// Rules: the next boundary sticks to the weekly anchor's clock time (D2
+// 2026-11-19; the DayBoundary+24h / midnight chains are only the no-anchor
+// fallbacks); daysLeft counts [today, reset day] inclusive (D1); DayStartWeekly
+// re-anchors to the CURRENT B weekly% (a mid-day drop never relaxes today's
+// ceiling — the boundary has not moved); allowance =
+// max((weeklyTotal−dayStart)/daysLeft, minDaily); ceiling =
+// min(dayStart+allowance, hardWallPct); the newest observed weekly reset is
+// adopted as the anchor; the P7 latch carries over.
 // Returns ok=false when B's weekly% is unavailable (caller leaves Budget
 // untouched and flags the skipped settlement).
 func settleBudget(in Input) (BudgetState, bool) {
@@ -297,15 +299,21 @@ func adoptAnchor(in Input, b *domain.QuotaSnapshot) *time.Time {
 	return cur
 }
 
-// nextBoundary computes the instant the NEXT settlement falls due: old
-// boundary +24h, or on cold start today at the anchor clock time (midnight
-// without an anchor), rolled forward once when that instant is already past.
+// nextBoundary computes the instant the NEXT settlement falls due (2026-11-19
+// D2, anchor-first): when the weekly anchor is known the day chain sticks to
+// the anchor's clock time — today at that clock, rolled to tomorrow once the
+// instant is past — so a stale midnight chain can never pin the settlement
+// clock at 00:00 forever. Anchor unknown keeps the old fallbacks: old
+// boundary +24h (blind chain), else today's midnight. The shared tail rolls
+// the candidate forward once when already past, inclusive at the exact
+// instant (audit M7).
 func nextBoundary(in Input) *time.Time {
 	var b time.Time
-	if in.Budget.DayBoundary != nil {
-		b = in.Budget.DayBoundary.Add(24 * time.Hour)
-	} else if in.Budget.WeekAnchorTime != nil {
+	if in.Budget.WeekAnchorTime != nil {
+		// D2 錨點優先:結算時刻貼回週重置鐘點;00:00 只是不知錨點的備案。
 		b = atClock(in.Now, *in.Budget.WeekAnchorTime)
+	} else if in.Budget.DayBoundary != nil {
+		b = in.Budget.DayBoundary.Add(24 * time.Hour)
 	} else {
 		b = midnight(in.Now)
 	}
@@ -316,11 +324,14 @@ func nextBoundary(in Input) *time.Time {
 }
 
 // daysLeftInWindow counts the budget days between today and the next weekly
-// anchor date ([today, anchorDate), calendar-day loop), keeping only
-// workdays when WorkdaysOnly is set, and never returning less than 1. An
-// anchor at or before Now rolls forward in 7-day weeks to the NEXT reset
-// (settlement after the weekly reset still paces the remaining days); a
-// missing anchor falls back to the design's 7-day blind split.
+// anchor date INCLUSIVE ([today, anchorDate] calendar-day loop — 2026-11-19
+// D1: the reset day is itself a budget day, its quota covers the morning up
+// to the weekly reset instant, so the last pre-reset day no longer swallows
+// the whole remainder), keeping only workdays when WorkdaysOnly is set, and
+// never returning less than 1. An anchor at or before Now rolls forward in
+// 7-day weeks to the NEXT reset (settlement at/after the weekly reset still
+// paces the remaining days); a missing anchor falls back to the design's
+// 7-day blind split.
 func daysLeftInWindow(now time.Time, anchor *time.Time, workdaysOnly bool) int {
 	if anchor == nil {
 		return 7
@@ -331,7 +342,7 @@ func daysLeftInWindow(now time.Time, anchor *time.Time, workdaysOnly bool) int {
 	}
 	end := midnight(a)
 	count := 0
-	for d := midnight(now); d.Before(end); d = d.AddDate(0, 0, 1) {
+	for d := midnight(now); !d.After(end); d = d.AddDate(0, 0, 1) {
 		if workdaysOnly && (d.Weekday() == time.Saturday || d.Weekday() == time.Sunday) {
 			continue
 		}
