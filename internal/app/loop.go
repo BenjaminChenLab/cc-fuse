@@ -386,6 +386,14 @@ func (l *Loop) RefreshBudget(now time.Time) {
 		l.mu.Unlock()
 		return
 	}
+	// 修訂 2(D6b,2026-11-19):身分檢查過了才貼 — envelope 的日界與下次
+	// 結算時刻必須等於計算用的切截時刻(錨點鐘點),不能讓升級前舊鏈 minted
+	// 的 00:00 卡住顯示與結算;無錨點時 SnapBoundary 原樣回傳,備案鏈不變。
+	// 同一把鎖內完成,與並發 Tick 結算互斥;冪等,同值不重寫。
+	if sb := policy.SnapBoundary(now, merged.DayBoundary, merged.WeekAnchorTime); sb != nil &&
+		(merged.DayBoundary == nil || !sb.Equal(*merged.DayBoundary)) {
+		merged.DayBoundary = sb
+	}
 	l.Budget = merged
 	dirty := l.budgetDirty
 	l.mu.Unlock()
@@ -417,6 +425,10 @@ func landRefresh(prev, snap, nb policy.BudgetState) (policy.BudgetState, bool) {
 	}
 	merged := prev
 	merged.CeilingToday = nb.CeilingToday
+	// 修訂 2(D6d):重算落帳一併補寫預算日起點(舊檔無欄時由 policy 以
+	// 舊演算法重建的 ref 填上)——否則第二次存檔仍用「日界−24h」推回前一天,
+	// 天花板 79.5→74.33 漂移。
+	merged.DayStartAt = nb.DayStartAt
 	return merged, true
 }
 

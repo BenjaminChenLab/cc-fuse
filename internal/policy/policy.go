@@ -67,6 +67,15 @@ type BudgetState struct {
 	// baseline the day's allowance is computed from. It is never relaxed
 	// mid-day even if the weekly% drops.
 	DayStartWeekly *float64
+	// DayStartAt is the instant the current budget day began (2026-11-19
+	// amendment 2 D6d). The recompute path used to reconstruct it as
+	// DayBoundary−24h — an identity that breaks once the boundary is snapped
+	// to the anchor clock (the snapped boundary's previous day is no longer
+	// this budget day's start, so a second save would drift the ceiling).
+	// Settlements and recompute landings persist the real start; legacy
+	// state without the field falls back to the old reconstruction and
+	// adopts it on the first landing.
+	DayStartAt *time.Time
 	// CeilingToday is the weekly% line B may burn up to today; reaching it
 	// invokes the strict guard (P5) and removes B as a refuge candidate.
 	CeilingToday *float64
@@ -279,10 +288,12 @@ func settleBudget(in Input) (BudgetState, bool) {
 	if ceiling > hardWallPct {
 		ceiling = hardWallPct
 	}
+	dayStartAt := in.Now // D6d:預算日起點持久化(ref 與日界解耦,存檔不漂移)
 	return BudgetState{
 		WeekAnchorTime: anchor,
 		DayBoundary:    next,
 		DayStartWeekly: &dayStart,
+		DayStartAt:     &dayStartAt,
 		CeilingToday:   &ceiling,
 		WarnedFiveHour: in.Budget.WarnedFiveHour,
 	}, true
@@ -365,6 +376,28 @@ func atClock(t time.Time, ref time.Time) time.Time {
 		ref.Hour(), ref.Minute(), ref.Second(), ref.Nanosecond(), t.Location())
 }
 
+// SnapBoundary re-derives the next settlement instant from the anchor clock
+// (2026-11-19 D2 rule, amendment 2 D6a): persisted state can outlive the rule
+// that produced it — a boundary minted by the old midnight chain keeps the
+// card's until-prefix and the settlement clock pinned at 00:00 long after the
+// anchor is known. Snap applies the anchor-first rule on demand (RefreshBudget
+// landing, boot load): today at the anchor's clock, rolled to tomorrow once
+// the instant is past (inclusive at the exact instant, audit M7). Anchor or
+// boundary missing → the boundary unchanged (nil stays nil: the anchorless
+// fallback chain and the baseline-without-boundary guard K1(d) stay as they
+// are — a missing boundary is never minted from nothing).
+func SnapBoundary(now time.Time, boundary, anchor *time.Time) *time.Time {
+	if anchor == nil || boundary == nil {
+		// 無錨點 → 備案鏈原樣;無日界 → 回傳 nil,不憑空造日界(K1(d) 精神)。
+		return boundary
+	}
+	b := atClock(now, *anchor)
+	if !b.After(now) {
+		b = b.Add(24 * time.Hour)
+	}
+	return &b
+}
+
 // RefreshBudget recomputes TODAY's ceiling immediately after the budget
 // settings were saved (2026-11-16 plan R4) instead of waiting for the next
 // daily settlement. Returns (state, ok); ok=false means "not computable now"
@@ -405,7 +438,13 @@ func RefreshBudget(in Input) (BudgetState, bool) {
 	if b.DayBoundary == nil {
 		return b, false
 	}
+	// D6d(2026-11-19):預算日起點優先取持久化的 DayStartAt(與日界解耦,
+	// 日界貼回錨點鐘點後「日界−24h」不再恆等於本預算日起點);舊檔缺欄才
+	// 用舊演算法重建,並在本次落帳補寫(下一次存檔起不再漂移)。
 	ref := b.DayBoundary.Add(-24 * time.Hour)
+	if b.DayStartAt != nil {
+		ref = *b.DayStartAt
+	}
 	days := daysLeftInWindow(ref, b.WeekAnchorTime, in.Cfg.Budget.WorkdaysOnly)
 	allowance := (in.Cfg.Budget.WeeklyTotalPct - *b.DayStartWeekly) / float64(days)
 	if allowance < in.Cfg.Budget.MinDailyAllowancePct {
@@ -416,6 +455,9 @@ func RefreshBudget(in Input) (BudgetState, bool) {
 		ceiling = hardWallPct
 	}
 	b.CeilingToday = &ceiling
+	if b.DayStartAt == nil {
+		b.DayStartAt = &ref
+	}
 	return b, true
 }
 

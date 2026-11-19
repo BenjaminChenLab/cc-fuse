@@ -107,6 +107,13 @@ func LoadBudget(statePath string) (policy.BudgetState, error) {
 	if err := json.Unmarshal(st.Budget, &b); err != nil {
 		return policy.BudgetState{}, fmt.Errorf("budget payload in %s: %w", statePath, err)
 	}
+	// 修訂 2(D6c,2026-11-19):持久化狀態可能早於錨點規則(舊午夜鏈)——
+	// 載入即貼回錨點鐘點,第一輪 Tick 起顯示與結算就和計算一致;只在記憶體
+	// 生效,下次結算落盤時帶出(冪等,重複啟動安全)。日界或錨點缺任一 →
+	// 原樣(無錨點備案鏈、基準無日界防禦皆不變)。
+	if b.DayBoundary != nil && b.WeekAnchorTime != nil {
+		b.DayBoundary = policy.SnapBoundary(time.Now(), b.DayBoundary, b.WeekAnchorTime)
+	}
 	return b, nil
 }
 
