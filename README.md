@@ -34,7 +34,7 @@ The identity of the active account is decided by matching the API key in `settin
 ### The main window
 
 - **A/B quota cards** — each card shows the account avatar, name, endpoint and two quota **progress bars** (5-hour window and weekly window) that turn orange at 70% and red at 90%, with a reset countdown. The active account's card is highlighted in blue.
-- **B's card** also shows a **今日天花板** chip — the weekly-percentage ceiling allocated to today; hitting it forces the switch back to A (when enforcement is on; otherwise the chip is annotated 不強制).
+- **B's card** also shows a **ceiling chip** — 「到〈HH:MM〉前:天花板 週 X% · 尚可 Ypt」, the weekly-percentage ceiling allocated to the current budget slice up to the next cut-off (the detected weekly-reset clock), plus how much is still burnable today; hitting it forces the switch back to A (when enforcement is on; otherwise the chip is annotated 不強制).
 - **A's card** shows a **恢復預計** chip — when the 5-hour window resets, A is expected to be back in the safe zone.
 - **提示列** — health flags (自動切換:開/已暫停, 額度資料過期, key 失效, 解析失敗) plus the **暫停自動 / 恢復自動** button and a manual refresh.
 - Every switch, warning and pause also raises a Windows toast.
