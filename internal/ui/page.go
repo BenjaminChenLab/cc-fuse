@@ -4,7 +4,9 @@ package ui
 // Dark refined theme + EN/zh i18n (2026-11-17): every string comes from the
 // I18N dictionary applied via data-i18n attributes; the language defaults to
 // the browser's (zh → 中文, otherwise English), the header button overrides
-// it and the choice persists in localStorage. Every dynamic string is still
+// it. The choice persists in config.json's uilang field via POST /api/uilang
+// (2026-11-19) — localStorage alone cannot survive the temporary port the
+// server binds per window open. Every dynamic string is still
 // built via DOM textContent (never innerHTML).
 // The quota numbers come from GET /api/status and refresh every 5s;
 // switching posts /api/switch (P1 manual, immediate). Candidate names/keys
@@ -19,6 +21,7 @@ const indexHTML = `<!doctype html>
  body{background:radial-gradient(1100px 500px at 85% -10%,#131722 0%,var(--bg) 55%);color:var(--text);font-family:"Segoe UI","Microsoft JhengHei",sans-serif;font-size:16px;margin:20px auto;max-width:940px}
  h2{font-size:16px;letter-spacing:2px;font-weight:600;color:var(--muted);margin:26px 0 12px;user-select:none}
  fieldset{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px 18px;margin-bottom:14px}
+ fieldset > div{margin:10px 0}
  legend{color:var(--accent);font-weight:600;font-size:14px;padding:0 8px}
  label{display:inline-block;width:190px;color:var(--text);cursor:help}
  input{background:var(--card2);color:var(--text);border:1px solid var(--border2);border-radius:8px;padding:7px 10px;font-size:15px}
@@ -112,6 +115,8 @@ const indexHTML = `<!doctype html>
 
 <fieldset><legend data-i18n="legOther">其他</legend>
  <div><label data-i18n="lblQmPath" data-i18n-title="tipQmPath" title="切換時翻轉此檔的 mode: 行(RACING/SAVING),給其他 Claude session 讀取的搶速/省錢訊號。檔案不存在只跳過,不影響切換。">quota-mode.md 路徑</label><input type="text" id="qm"></div>
+ <div><label data-i18n="lblRacingNotify" data-i18n-title="tipRacingNotify" title="勾選:每次切換帳號且成功翻寫 quota-mode 後,cc-fuse 會開一個一次性無頭 session,通知 go-when-racing 註冊的 parked session(RACING=開工令、SAVING=停工令)。不勾:切換後不通知。">切換後通知</label><span class="switch"><input type="checkbox" id="rnotify" data-i18n-title="tipRacingNotify" title="勾選:每次切換帳號且成功翻寫 quota-mode 後,cc-fuse 會開一個一次性無頭 session,通知 go-when-racing 註冊的 parked session(RACING=開工令、SAVING=停工令)。不勾:切換後不通知。"><i></i></span></div>
+ <div><label data-i18n="lblResetNotify" data-i18n-title="tipResetNotify" title="勾選:A 帳號 5h 用量過牆線時,重置時刻 + 1 分自動叫停住的 session 原地 retry(RETRY 令,不翻 quota-mode.md)。">5h 重置通知</label><span class="switch"><input type="checkbox" id="resetnotify" data-i18n-title="tipResetNotify" title="勾選:A 帳號 5h 用量過牆線時,重置時刻 + 1 分自動叫停住的 session 原地 retry(RETRY 令,不翻 quota-mode.md)。"><i></i></span></div>
  <div><label data-i18n="lblProxy" data-i18n-title="tipProxy" title="查詢額度 API 用的 HTTP proxy 網址;留空=直連。">proxy(空=直連)</label><input type="text" id="proxy"></div>
  <div><label data-i18n="lblAuto" data-i18n-title="tipAuto" title="存檔時立即寫入/移除登錄檔 Run 機碼:開機自動啟動 cc-fuse。">開機自動啟動</label><span class="switch"><input type="checkbox" id="auto" data-i18n-title="tipAuto" title="存檔時立即寫入/移除登錄檔 Run 機碼:開機自動啟動 cc-fuse。"><i></i></span></div>
 </fieldset>
@@ -134,7 +139,7 @@ var I18N={
   lblStale:"資料過期(分)",lblParseFail:"連續解析失敗警報次數",
   lblPoll:"一般間隔",lblFast:"快輪詢間隔",lblFastAbove:"快輪詢觸發(%)",
   lblEnforce:"天花板強制切回 A",lblWeeklyTotal:"週預算總量(%)",lblDailyFloor:"每日保底(%)",lblWorkdays:"只數工作日",
-  lblQmPath:"quota-mode.md 路徑",lblProxy:"proxy(空=直連)",lblAuto:"開機自動啟動",lblDbPath:"cc-switch 資料庫路徑",
+  lblQmPath:"quota-mode.md 路徑",lblRacingNotify:"切換後通知",lblResetNotify:"5h 重置通知",lblProxy:"proxy(空=直連)",lblAuto:"開機自動啟動",lblDbPath:"cc-switch 資料庫路徑",
   btnSave:"存檔",btnImport:"從 cc-switch 匯入",
   tipName:"顯示用的帳號名稱:切換卡片與系統匣會用到,可任意命名。",
   tipKey:"z.ai 的 API 金鑰。身分判定以此為準:settings.json 裡的 key 屬於哪個帳號,就是靠比對這裡的 key。",
@@ -156,6 +161,8 @@ var I18N={
   tipDailyFloor:"每天至少分配這個額度百分比(剩餘天數平均算出來更少時用它墊底)。設 0=嚴格平均,不保底。",
   tipWorkdays:"勾選:剩餘天數只數工作日,週末不佔每日額度;不勾:每天額度=剩餘÷日曆天數。",
   tipQmPath:"切換時翻轉此檔的 mode: 行(RACING/SAVING),給其他 Claude session 讀取的搶速/省錢訊號。檔案不存在只跳過,不影響切換。",
+  tipRacingNotify:"勾選:每次切換帳號且成功翻寫 quota-mode 後,cc-fuse 會開一個一次性無頭 session,通知 go-when-racing 註冊的 parked session(RACING=開工令、SAVING=停工令)。不勾:切換後不通知。",
+  tipResetNotify:"勾選:A 帳號 5 小時用量過牆線(預設 99%)時,cc-fuse 會在 5 小時重置時刻 + 1 分自動開一個一次性無頭 session,叫停在 429 牆前的 session 原地 retry 續做(RETRY 令,不翻寫 quota-mode.md)。不勾:重置時不通知。",
   tipProxy:"查詢額度 API 用的 HTTP proxy 網址;留空=直連。",
   tipAuto:"存檔時立即寫入/移除登錄檔 Run 機碼:開機自動啟動 cc-fuse。",
   active:"使用中",switchBtn:"切換",switchTip:"手動切換(P1 最優先,立即生效)",
@@ -178,7 +185,7 @@ var I18N={
   lblStale:"Stale after (min)",lblParseFail:"Parse-fail alert count",
   lblPoll:"Poll interval",lblFast:"Fast interval",lblFastAbove:"Fast trigger (%)",
   lblEnforce:"Ceiling forces back to A",lblWeeklyTotal:"Weekly budget total (%)",lblDailyFloor:"Daily floor (%)",lblWorkdays:"Workdays only",
-  lblQmPath:"quota-mode.md path",lblProxy:"Proxy (empty = direct)",lblAuto:"Launch at logon",lblDbPath:"cc-switch database path",
+  lblQmPath:"quota-mode.md path",lblRacingNotify:"Notify parked sessions",lblResetNotify:"5h-reset retry notify",lblProxy:"Proxy (empty = direct)",lblAuto:"Launch at logon",lblDbPath:"cc-switch database path",
   btnSave:"Save",btnImport:"Import from cc-switch",
   tipName:"Display name for the account — shown on the switcher cards and in the tray. Free-form.",
   tipKey:"The z.ai API key. This is the identity fingerprint: which account settings.json belongs to is decided by matching this key.",
@@ -201,6 +208,8 @@ var I18N={
   lblNoFleeWknd:"No auto-flee on weekends",
   tipNoFleeWknd:"Checked: on Saturdays and Sundays cc-fuse will not flee to B automatically — it stays on A even when hot (manual switching unaffected; recovery and ceiling returns to A still apply). Unchecked: weekends behave like weekdays.",
   tipQmPath:"On every switch, flip this file's mode: line (RACING/SAVING) — the race/save signal other Claude sessions read. A missing file is skipped without affecting the switch.",
+  tipRacingNotify:"On: after every account switch with a successful quota-mode flip, cc-fuse spawns a one-shot headless session to notify the parked go-when-racing sessions (RACING = go order, SAVING = stop order). Off: switching never notifies.",
+  tipResetNotify:"On: when account A's 5-hour usage crosses the wall line (default 99%), cc-fuse spawns a one-shot headless session at the 5h reset instant + 1 min, telling sessions parked on the 429 wall to retry in place (a RETRY order — no quota-mode write). Off: no reset notify.",
   tipProxy:"HTTP proxy URL for the quota API; empty = direct connection.",
   tipAuto:"On save, writes/removes the registry Run key that launches cc-fuse at logon.",
   active:"Active",switchBtn:"Switch",switchTip:"Manual switch (P1 top priority, immediate)",
@@ -227,7 +236,13 @@ function applyLang(){
  document.getElementById("lang").textContent=(lang==="zh")?"English":"中文";
  document.documentElement.lang=(lang==="zh")?"zh-Hant":"en";
 }
-function setLang(l){lang=l;try{localStorage.setItem("ccfuseLang",l)}catch(e){}applyLang();fetchStatus()}
+function setLang(l){lang=l;try{localStorage.setItem("ccfuseLang",l)}catch(e){}applyLang();fetchStatus();
+ // 2026-11-19 language persistence: every window open binds a temporary port
+ // and localStorage is keyed by origin, so the choice is flushed to
+ // config.json (the uilang field) right away; the next open corrects from
+ // /api/config.
+ api("POST","/api/uilang",{lang:l},function(){})}
+function applyServerLang(l){if((l!=="en"&&l!=="zh")||l===lang)return;lang=l;try{localStorage.setItem("ccfuseLang",l)}catch(e){}applyLang()}
 
 // ---- 小工具 ----
 function toModel(s){try{var m=JSON.parse(s||"{}");return (m&&typeof m==="object")?m:{}}catch(e){return {}}}
@@ -363,6 +378,10 @@ setInterval(fetchStatus,5000);
 function readProfile(pre,id){
  return {id:id,name:val(pre+"Name"),apiKey:val(pre+"Key"),baseUrl:val(pre+"URL"),modelEnv:toModel(val(pre+"Model"))};
 }
+// watchersFile has no settings row (JSON-only by design): the module var
+// mirrors the uilang:lang idiom — load() stashes the server value, collect()
+// passes it back so the main save never wipes the registry path.
+var watchersFile="";
 function load(c){
  var a=(c.profiles&&c.profiles[0])||{},b=(c.profiles&&c.profiles[1])||{};
  fill(a,"a");fill(b,"b");
@@ -374,7 +393,11 @@ function load(c){
  document.getElementById("bEnforce").checked=!!(c.budget&&c.budget.enforceDailyCeiling);
  document.getElementById("bWork").checked=!!(c.budget&&c.budget.workdaysOnly);
  document.getElementById("noFleeWknd").checked=!!c.noFleeOnWeekend;
- val2("qm",c.quotaModeFile);val2("proxy",c.proxyUrl);
+ val2("qm",c.quotaModeFile);
+ watchersFile=c.watchersFile||"";
+ document.getElementById("rnotify").checked=!!c.racingNotify;
+ document.getElementById("resetnotify").checked=!!c.resetNotify;
+ val2("proxy",c.proxyUrl);
  document.getElementById("auto").checked=!!c.autoStart;
 }
 function collect(){
@@ -388,8 +411,12 @@ function collect(){
   fastPollAbovePct:num("fastAbove"),
   noFleeOnWeekend:document.getElementById("noFleeWknd").checked,
   budget:{weeklyTotalPct:num("bWeekly"),minDailyAllowancePct:num("bDaily"),workdaysOnly:document.getElementById("bWork").checked,enforceDailyCeiling:document.getElementById("bEnforce").checked},
-  quotaModeFile:val("qm"),autoStart:document.getElementById("auto").checked,
-  proxyUrl:val("proxy")
+  quotaModeFile:val("qm"),racingNotify:document.getElementById("rnotify").checked,
+  resetNotify:document.getElementById("resetnotify").checked,
+  watchersFile:watchersFile, // 2026-11-20: the main save must not wipe the registry path (zero-value deserialization clears the field — the enforceDailyCeiling lesson)
+  autoStart:document.getElementById("auto").checked,
+  proxyUrl:val("proxy"),
+  uilang:lang // 2026-11-19: the main save must not wipe the language choice (zero-value deserialization clears the field — the enforceDailyCeiling lesson)
  };
 }
 document.getElementById("save").onclick=function(){
@@ -432,7 +459,7 @@ document.getElementById("import").onclick=function(){
  });
 };
 api("GET","/api/config",null,function(st,body){
- if(st===200){try{load(JSON.parse(body))}catch(e){}}
+ if(st===200){try{var c=JSON.parse(body);load(c);applyServerLang(c.uilang)}catch(e){}}
 });
 </script>
 </body>

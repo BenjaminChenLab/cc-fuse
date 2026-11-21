@@ -29,14 +29,16 @@ func TestDaysLeftNilAnchorBlindSplit(t *testing.T) {
 	}
 }
 
-// U2(D1 前滾迴圈 !a.After(now),恰等於瞬間):錨點瞬間 == now → 前滾一整週,
-// 視窗 [五20, 五27] 含頭尾 = 日曆 8 天、工作日 6 天(兩個週五:本日與重置日)。
+// U2(修訂 3 切片語意,now 恰在錨點瞬間 = 新週 day1 起點):錨點瞬間 == now
+// → 前滾一整週;切片 [五→六](併入 day1 起點)、[六→日]、[日→一] 於
+// workdays 模式併入/跳過 → 工作日切片 5 片(day1 Fri→Mon、day2 Mon→Tue、
+// day3 Tue→Wed、day4 Wed→Thu、day5 Thu→Fri;使用者實例逐字)、日曆切片 7 片。
 func TestDaysLeftRollsAtExactAnchorInstant(t *testing.T) {
-	if got := daysLeftInWindow(uFri20_1457, uAnchor(), true); got != 6 {
-		t.Fatalf("roll at exact instant: daysLeft = %d, want 6 ([五20,五27] 工作日)", got)
+	if got := daysLeftInWindow(uFri20_1457, uAnchor(), true); got != 5 {
+		t.Fatalf("roll at exact instant: daysLeft = %d, want 5 (切片語意 5 個預算日)", got)
 	}
-	if got := daysLeftInWindow(uFri20_1457, uAnchor(), false); got != 8 {
-		t.Fatalf("roll at exact instant: daysLeft = %d, want 8 ([五20,五27] 日曆天)", got)
+	if got := daysLeftInWindow(uFri20_1457, uAnchor(), false); got != 7 {
+		t.Fatalf("roll at exact instant: daysLeft = %d, want 7 (日曆切片)", got)
 	}
 }
 

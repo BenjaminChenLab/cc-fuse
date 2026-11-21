@@ -53,10 +53,11 @@ type LoopResult struct {
 // outside the lock — only the in-memory cell is guarded.
 type Loop struct {
 	// Collaborators (interfaces, see adapters.go).
-	Mon Monitor
-	Sw  Switcher
-	Qm  QuotaFlipper
-	Not Notifier
+	Mon  Monitor
+	Sw   Switcher
+	Qm   QuotaFlipper
+	Not  Notifier
+	Wake WakeNotifier // post-switch wake notify (2026-11-20); nil = never notify
 
 	Cfg          config.Config    // live config cell (the settings window edits this)
 	Profiles     []domain.Profile // the A/B table; ID is the cross-card handle
@@ -77,6 +78,11 @@ type Loop struct {
 	parseAlerted  bool                             // PD2 toast latched for the current failure streak
 	staleNotified bool                             // stale toast latched for the current bad streak
 	lastStale     bool                             // whether the most recent round ran on stale data
+
+	// RESET wall-episode machine (2026-11-21 reset-notify), guarded by mu
+	// like every field above; the machine itself lives in resetnotify.go.
+	rnEp       resetEpisode // the open/closed wall episode (zero value = closed)
+	rnLastFire time.Time    // real-clock stamp of the last RESET fire (min-gap window)
 
 	wakeOnce sync.Once
 	wakeCh   chan struct{} // 手動/外部事件到場 → 打斷 Run 的睡眠,指令即時生效
@@ -160,6 +166,11 @@ func (l *Loop) Tick(ctx context.Context, now time.Time) LoopResult {
 			l.logf("預警:%s", dec.Reason)
 		}
 	}
+
+	// 5b. RESET 牆 episode 狀態機(2026-11-21 reset-notify,機器本體在
+	// resetnotify.go):查詢/決策之後掛點,Current 已含本輪切換結果;
+	// stale 輪只凍結樣本驅動的遷移,取消照走。
+	l.resetNotifyTick(now, cfg, snapA, !dec.Stale)
 
 	// 6. 預算結算落帳(§7:記帳與動作解耦;冷啟結算也必須抵達 state)。
 	res.BudgetSaved = l.saveBudget(dec.Budget)
@@ -386,11 +397,14 @@ func (l *Loop) RefreshBudget(now time.Time) {
 		l.mu.Unlock()
 		return
 	}
-	// 修訂 2(D6b,2026-11-19):身分檢查過了才貼 — envelope 的日界與下次
-	// 結算時刻必須等於計算用的切截時刻(錨點鐘點),不能讓升級前舊鏈 minted
-	// 的 00:00 卡住顯示與結算;無錨點時 SnapBoundary 原樣回傳,備案鏈不變。
-	// 同一把鎖內完成,與並發 Tick 結算互斥;冪等,同值不重寫。
-	if sb := policy.SnapBoundary(now, merged.DayBoundary, merged.WeekAnchorTime); sb != nil &&
+	// Amendment 2 (D6b, 2026-11-19): snap only after the identity check — the
+	// envelope's boundary and next settlement instant must equal the calc's
+	// cutting time (the anchor clock); a 00:00 minted by the pre-upgrade chain
+	// must not pin the display and the settlement forever. No anchor →
+	// SnapBoundary returns the boundary unchanged (fallback chain intact).
+	// Done inside the same lock (mutually exclusive with a concurrent Tick
+	// settlement); idempotent, no rewrite on the same value.
+	if sb := policy.SnapBoundary(now, merged.DayBoundary, merged.WeekAnchorTime, in.Cfg.Budget.WorkdaysOnly); sb != nil &&
 		(merged.DayBoundary == nil || !sb.Equal(*merged.DayBoundary)) {
 		merged.DayBoundary = sb
 	}
@@ -425,9 +439,10 @@ func landRefresh(prev, snap, nb policy.BudgetState) (policy.BudgetState, bool) {
 	}
 	merged := prev
 	merged.CeilingToday = nb.CeilingToday
-	// 修訂 2(D6d):重算落帳一併補寫預算日起點(舊檔無欄時由 policy 以
-	// 舊演算法重建的 ref 填上)——否則第二次存檔仍用「日界−24h」推回前一天,
-	// 天花板 79.5→74.33 漂移。
+	// Amendment 2 (D6d): the recompute landing also persists the budget-day
+	// start (filled by policy from the legacy reconstruction when the file
+	// lacks the field) — without it the second save still reconstructs the
+	// previous day via boundary−24h and the ceiling drifts 79.5→74.33.
 	merged.DayStartAt = nb.DayStartAt
 	return merged, true
 }
@@ -471,6 +486,18 @@ func (l *Loop) SeedBudget(b policy.BudgetState) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.Budget = b
+}
+
+// MarkBudgetDirty latches "the envelope needs a recompute" so the next Tick
+// lands a freshly computed ceiling (same latch the settings save already
+// uses when its recompute cannot run yet). Boot recompute, 2026-11-19:
+// restarting used to show the stale settled ceiling until the user saved —
+// main.go now marks the budget dirty right after seeding a settled envelope
+// and the first poll heals it. Idempotent: a redundant mark is free.
+func (l *Loop) MarkBudgetDirty() {
+	l.mu.Lock()
+	l.budgetDirty = true
+	l.mu.Unlock()
 }
 
 // knobs copies the mutable inputs one decision round needs.
@@ -632,9 +659,23 @@ func (l *Loop) doSwitch(dec policy.Decision, cfg config.Config) LoopResult {
 	l.mu.Lock()
 	l.Current = dec.Target
 	l.mu.Unlock()
+	// Flip the quota-mode line (auxiliary bookkeeping): failure logs only —
+	// it must never undo a completed settings.json switch (§11.5).
+	flipped := false
 	if dec.QuotaMode != "" && l.Qm != nil {
 		if err := l.Qm.Flip(cfg.QuotaModeFile, dec.QuotaMode); err != nil {
 			l.logf("quota-mode 翻轉失敗(切換照常生效):%v", err)
+		} else {
+			flipped = true
+		}
+	}
+	// Wake notify (2026-11-20 racing-wake-notify): ONLY after a successful
+	// mode write, in either direction (contract v2) — an early notify would
+	// act on the old account's state, and a failed flip must not notify. A
+	// wake failure is log-only: the already-completed switch is never touched.
+	if flipped && cfg.RacingNotify && l.Wake != nil {
+		if err := l.Wake.Wake(cfg.WatchersFile, dec.QuotaMode); err != nil {
+			l.logf("切換後 wake notify 失敗(切換照常生效):%v", err)
 		}
 	}
 	l.Not.Notify("cc-fuse 已切換", dec.Reason)

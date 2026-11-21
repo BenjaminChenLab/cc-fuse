@@ -277,6 +277,13 @@ func settleBudget(in Input) (BudgetState, bool) {
 		return BudgetState{}, false
 	}
 	anchor := adoptAnchor(in, b)
+	// D2 (2026-11-19): the freshly adopted anchor governs the next boundary —
+	// a true cold start (empty persisted state) would otherwise fall back to
+	// the midnight chain even though the snapshot already carries the reset
+	// instant.
+	if anchor != nil {
+		in.Budget.WeekAnchorTime = anchor
+	}
 	next := nextBoundary(in)
 	days := daysLeftInWindow(in.Now, anchor, in.Cfg.Budget.WorkdaysOnly)
 	dayStart := *b.WeeklyPct
@@ -288,7 +295,7 @@ func settleBudget(in Input) (BudgetState, bool) {
 	if ceiling > hardWallPct {
 		ceiling = hardWallPct
 	}
-	dayStartAt := in.Now // D6d:預算日起點持久化(ref 與日界解耦,存檔不漂移)
+	dayStartAt := in.Now // D6d: persist the budget-day start (decouples ref from the boundary; saves never drift)
 	return BudgetState{
 		WeekAnchorTime: anchor,
 		DayBoundary:    next,
@@ -321,8 +328,17 @@ func adoptAnchor(in Input, b *domain.QuotaSnapshot) *time.Time {
 func nextBoundary(in Input) *time.Time {
 	var b time.Time
 	if in.Budget.WeekAnchorTime != nil {
-		// D2 錨點優先:結算時刻貼回週重置鐘點;00:00 只是不知錨點的備案。
+		// D2 anchor-first: the settlement clock sticks to the anchor's clock;
+		// 00:00 is only the no-anchor fallback. Amendment 3: with workdays-only
+		// the cut-off never lands on Sat/Sun — the candidate rolls to the next
+		// workday so the weekend slice merges into the previous workday slice
+		// (Fri 15:00 → Mon 15:00 is ONE budget day).
 		b = atClock(in.Now, *in.Budget.WeekAnchorTime)
+		if in.Cfg.Budget.WorkdaysOnly {
+			for b.Weekday() == time.Saturday || b.Weekday() == time.Sunday {
+				b = b.Add(24 * time.Hour)
+			}
+		}
 	} else if in.Budget.DayBoundary != nil {
 		b = in.Budget.DayBoundary.Add(24 * time.Hour)
 	} else {
@@ -330,19 +346,26 @@ func nextBoundary(in Input) *time.Time {
 	}
 	if !b.After(in.Now) {
 		b = b.Add(24 * time.Hour)
+		if in.Cfg.Budget.WorkdaysOnly && in.Budget.WeekAnchorTime != nil {
+			for b.Weekday() == time.Saturday || b.Weekday() == time.Sunday {
+				b = b.Add(24 * time.Hour)
+			}
+		}
 	}
 	return &b
 }
 
-// daysLeftInWindow counts the budget days between today and the next weekly
-// anchor date INCLUSIVE ([today, anchorDate] calendar-day loop — 2026-11-19
-// D1: the reset day is itself a budget day, its quota covers the morning up
-// to the weekly reset instant, so the last pre-reset day no longer swallows
-// the whole remainder), keeping only workdays when WorkdaysOnly is set, and
-// never returning less than 1. An anchor at or before Now rolls forward in
-// 7-day weeks to the NEXT reset (settlement at/after the weekly reset still
-// paces the remaining days); a missing anchor falls back to the design's
-// 7-day blind split.
+// daysLeftInWindow counts the remaining budget days INCLUDING the current
+// slice (2026-11-19 amendment 3, slice semantics — user-defined by example):
+// a budget day is one cut-off slice (anchor clock → anchor clock); with
+// workdaysOnly, cut-offs landing on Sat/Sun are skipped so their slice merges
+// into the previous workday slice (Fri 14:57 → Mon 14:57 is ONE budget day).
+// days = 1 + the number of cut-off instants in (now, reset) that survive the
+// workday filter — the user's verification: Fri 16:00 → 5, Thu 09:00 → 2,
+// Thu 16:00 → 1 (the last slice takes the full remainder, ceiling = the
+// weekly budget total). An anchor at or before Now rolls forward in 7-day
+// weeks to the NEXT reset; a missing anchor falls back to the design's 7-day
+// blind split.
 func daysLeftInWindow(now time.Time, anchor *time.Time, workdaysOnly bool) int {
 	if anchor == nil {
 		return 7
@@ -351,18 +374,18 @@ func daysLeftInWindow(now time.Time, anchor *time.Time, workdaysOnly bool) int {
 	for !a.After(now) {
 		a = a.Add(7 * 24 * time.Hour)
 	}
-	end := midnight(a)
 	count := 0
-	for d := midnight(now); !d.After(end); d = d.AddDate(0, 0, 1) {
-		if workdaysOnly && (d.Weekday() == time.Saturday || d.Weekday() == time.Sunday) {
-			continue
+	t := atClock(now, a)
+	if !t.After(now) {
+		t = t.Add(24 * time.Hour)
+	}
+	for t.Before(a) {
+		if !workdaysOnly || (t.Weekday() != time.Saturday && t.Weekday() != time.Sunday) {
+			count++
 		}
-		count++
+		t = t.Add(24 * time.Hour)
 	}
-	if count < 1 {
-		count = 1
-	}
-	return count
+	return count + 1
 }
 
 // midnight returns the local midnight of t's calendar day.
@@ -382,18 +405,32 @@ func atClock(t time.Time, ref time.Time) time.Time {
 // card's until-prefix and the settlement clock pinned at 00:00 long after the
 // anchor is known. Snap applies the anchor-first rule on demand (RefreshBudget
 // landing, boot load): today at the anchor's clock, rolled to tomorrow once
-// the instant is past (inclusive at the exact instant, audit M7). Anchor or
-// boundary missing → the boundary unchanged (nil stays nil: the anchorless
-// fallback chain and the baseline-without-boundary guard K1(d) stay as they
-// are — a missing boundary is never minted from nothing).
-func SnapBoundary(now time.Time, boundary, anchor *time.Time) *time.Time {
+// the instant is past (inclusive at the exact instant, audit M7). Amendment 3:
+// with workdaysOnly the candidate never lands on Sat/Sun — a weekend landing
+// rolls to the next workday so the minted boundary always starts a workday
+// slice (Fri → Mon merges the weekend). Anchor or boundary missing → the
+// boundary unchanged (nil stays nil: the anchorless fallback chain and the
+// baseline-without-boundary guard K1(d) stay as they are — a missing boundary
+// is never minted from nothing).
+func SnapBoundary(now time.Time, boundary, anchor *time.Time, workdaysOnly bool) *time.Time {
 	if anchor == nil || boundary == nil {
-		// 無錨點 → 備案鏈原樣;無日界 → 回傳 nil,不憑空造日界(K1(d) 精神)。
+		// No anchor → keep the legacy fallback boundary as is; no boundary →
+		// return nil, never mint one from nothing (K1(d) spirit).
 		return boundary
 	}
 	b := atClock(now, *anchor)
+	if workdaysOnly {
+		for b.Weekday() == time.Saturday || b.Weekday() == time.Sunday {
+			b = b.Add(24 * time.Hour)
+		}
+	}
 	if !b.After(now) {
 		b = b.Add(24 * time.Hour)
+		if workdaysOnly {
+			for b.Weekday() == time.Saturday || b.Weekday() == time.Sunday {
+				b = b.Add(24 * time.Hour)
+			}
+		}
 	}
 	return &b
 }
@@ -438,9 +475,11 @@ func RefreshBudget(in Input) (BudgetState, bool) {
 	if b.DayBoundary == nil {
 		return b, false
 	}
-	// D6d(2026-11-19):預算日起點優先取持久化的 DayStartAt(與日界解耦,
-	// 日界貼回錨點鐘點後「日界−24h」不再恆等於本預算日起點);舊檔缺欄才
-	// 用舊演算法重建,並在本次落帳補寫(下一次存檔起不再漂移)。
+	// D6d (2026-11-19): the budget-day start prefers the persisted DayStartAt
+	// (decoupled from the boundary — after the boundary is snapped to the
+	// anchor clock, boundary−24h is no longer this budget day's start); legacy
+	// files without the field fall back to the old reconstruction and adopt
+	// it on this landing, so the second save never drifts.
 	ref := b.DayBoundary.Add(-24 * time.Hour)
 	if b.DayStartAt != nil {
 		ref = *b.DayStartAt

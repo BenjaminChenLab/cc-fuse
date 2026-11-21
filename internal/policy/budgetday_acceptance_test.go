@@ -76,8 +76,9 @@ func TestBudgetDayInclusiveDays(t *testing.T) {
 		{"A3a_weekend_excluded_unchanged", bdFri20, bdSat21, true, 1, 0},
 		// A3b:now 週六、錨點週日(全週末)→ 0 → 夾成 1(不變式)。
 		{"A3b_all_weekend_clamps_to_1", bdSat21, bdSun22, true, 1, 0},
-		// A3c:workdays=false 含頭含尾照數:週四~週六 → 3(舊=2)。
-		{"A3c_calendar_days_inclusive", bdThu19, bdSat21, false, 3, 2},
+		// A3c:workdays=false 週六日各自成片:週四 11:00 → 週六 10:00 間的切截
+		// (週五 10:00)→ 2 片(舊曆日語意=3)。
+		{"A3c_calendar_slices", bdThu19, bdSat21, false, 2, 3},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

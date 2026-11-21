@@ -105,7 +105,8 @@ func TestToggleOff_P6ComparesResets(t *testing.T) {
 // --- R4:RefreshBudget(定稿語意) ---
 
 // 重算:改總量 90→60 → 天花板換新;基準/日界/錨點不動;不需 B 快照。
-// 天數=3(2026-11-19 D1 含頭含尾:週三~週五重置日;ref=日界 thu15−24h=週三 15:00)。
+// 天數=2(2026-11-19 修訂 3 切片語意:ref=切片起點 週三 15:00 → 剩餘切片
+// [三午,四]、[五]=重置 → 2 片)。
 func TestRefreshBudget_RecomputeNewTotal(t *testing.T) {
 	in := policy.Input{
 		Now: wed16, Budget: settledBudget(55), Cfg: cfgWith(60, true),
@@ -115,7 +116,7 @@ func TestRefreshBudget_RecomputeNewTotal(t *testing.T) {
 	if !ok {
 		t.Fatalf("重算路徑必須可算(不需 B 快照)")
 	}
-	exp := 20.0 + (60.0-20.0)/3.0
+	exp := 20.0 + (60.0-20.0)/2.0
 	if math.Abs(derefP(got.CeilingToday)-exp) > 1e-9 {
 		t.Fatalf("ceiling = %v, want %v", derefP(got.CeilingToday), exp)
 	}
@@ -144,7 +145,7 @@ func TestRefreshBudget_IntraDayIdempotent(t *testing.T) {
 
 // 日中不放寬性質:結算後同一預算日內任何時刻重存(設定不變)→ 天花板 ≤ 結算值(此例恆等)。
 func TestRefreshBudget_NeverRelaxes(t *testing.T) {
-	settled := 20.0 + (90.0-20.0)/3.0 // 結算於 wed15:剩 3 個預算日(週三~週五,2026-11-19 D1 含重置日)
+	settled := 20.0 + (90.0-20.0)/2.0 // 結算於 wed15:剩 2 個切片([三午,四]、[五]=重置;修訂 3)
 	for _, now := range []time.Time{wed16, wed23_50, thu00_10, thu14_59} {
 		st, ok := policy.RefreshBudget(policy.Input{
 			Now: now, Budget: settledBudget(settled), Cfg: cfgWith(90, true),
@@ -163,19 +164,20 @@ func TestRefreshBudget_NeverRelaxes(t *testing.T) {
 }
 
 // Q1:工作日開關改了 → 天數以新設定按 ref 重算,當天生效(此例:切到日曆天 → 更緊)。
+// ref = 日界 sat15 − 24h = 週五 15:00(切片語意:workdays 5 片週末併入;日曆 7 片)。
 func TestRefreshBudget_WorkdaysFlipSameDay(t *testing.T) {
 	budget := policy.BudgetState{
 		WeekAnchorTime: &nextFri, DayBoundary: &sat15, DayStartWeekly: f(10), CeilingToday: f(26),
 	}
-	c := config.Default() // WorkdaysOnly=true([五20,五27] 含頭尾 6 個工作日,D1)
+	c := config.Default() // WorkdaysOnly=true(修訂 3 切片語意:週六日切片併入 day1 → [五16,五27] 5 個切片)
 	c.Budget.EnforceDailyCeiling = true
 	got, ok := policy.RefreshBudget(policy.Input{Now: fri16, Budget: budget, Cfg: c})
-	if !ok || math.Abs(derefP(got.CeilingToday)-(10.0+80.0/6.0)) > 1e-9 {
-		t.Fatalf("同設定重算應保持 10+80/6≈23.333:%v ok=%v", derefP(got.CeilingToday), ok)
+	if !ok || math.Abs(derefP(got.CeilingToday)-(10.0+80.0/5.0)) > 1e-9 {
+		t.Fatalf("同設定重算應保持 10+80/5=26:%v ok=%v", derefP(got.CeilingToday), ok)
 	}
-	c.Budget.WorkdaysOnly = false // 改成日曆天([五20,五27] 含頭尾 8 天)→ 當天生效
+	c.Budget.WorkdaysOnly = false // 改成日曆切片(週六日各自成片 → 7 片)→ 當天生效
 	got, ok = policy.RefreshBudget(policy.Input{Now: fri16, Budget: budget, Cfg: c})
-	exp := 10.0 + (90.0-10.0)/8.0
+	exp := 10.0 + (90.0-10.0)/7.0
 	if !ok || math.Abs(derefP(got.CeilingToday)-exp) > 1e-9 {
 		t.Fatalf("工作日開關當天生效:ceiling=%v want %v ok=%v", derefP(got.CeilingToday), exp, ok)
 	}
@@ -196,8 +198,8 @@ func TestRefreshBudget_ColdStartFresh(t *testing.T) {
 	if derefP(got.DayStartWeekly) != 25 {
 		t.Fatalf("DayStartWeekly=25:%+v", got)
 	}
-	if got.DayBoundary == nil || !got.DayBoundary.Equal(fri00) {
-		t.Fatalf("DayBoundary=翌日 00:00:%+v", got.DayBoundary)
+	if got.DayBoundary == nil || !got.DayBoundary.Equal(thu15) {
+		t.Fatalf("DayBoundary=當日錨點鐘點 thu15(冷啟採用快照錨點,D2):%+v", got.DayBoundary)
 	}
 	if got.WeekAnchorTime == nil || !got.WeekAnchorTime.Equal(fri15) {
 		t.Fatalf("錨點=B 的下個重置:%+v", got.WeekAnchorTime)

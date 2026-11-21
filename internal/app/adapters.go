@@ -13,6 +13,7 @@ import (
 	"cc-fuse/internal/quotamode"
 	"cc-fuse/internal/store"
 	"cc-fuse/internal/switcher"
+	"cc-fuse/internal/watchers"
 )
 
 // Monitor queries one account's quota; the real *monitor.Client already has
@@ -39,6 +40,15 @@ type Notifier interface {
 	Notify(title, body string)
 }
 
+// WakeNotifier spawns the post-switch wake notify (2026-11-20 racing-wake-
+// notify): after a SUCCESSFUL quota-mode flip, one fire-and-forget headless
+// session notifies the go-when-racing parked sessions, carrying the flip
+// direction (RACING go order / SAVING stop order); the real side is the
+// package-level watchers.Spawn.
+type WakeNotifier interface {
+	Wake(watchersFile, mode string) error
+}
+
 // SwitcherFunc adapts a plain function to Switcher (DI glue for main).
 type SwitcherFunc func(p domain.Profile, settingsPath string) error
 
@@ -56,6 +66,12 @@ type NotifierFunc func(title, body string)
 
 // Notify implements Notifier.
 func (f NotifierFunc) Notify(title, body string) { f(title, body) }
+
+// WakeNotifierFunc adapts a plain function to WakeNotifier (DI glue for main).
+type WakeNotifierFunc func(watchersFile, mode string) error
+
+// Wake implements WakeNotifier.
+func (f WakeNotifierFunc) Wake(watchersFile, mode string) error { return f(watchersFile, mode) }
 
 // MonitorPool routes each Query to a monitor.Client bound to the profile's
 // own BaseURL, building clients lazily. In practice A and B share one z.ai
@@ -95,7 +111,7 @@ func (p *MonitorPool) client(baseURL string) *monitor.Client {
 // file / no budget payload → zero value, policy settles from current
 // numbers). Corrupt JSON is surfaced for the boot log; the app still starts
 // with a zero budget rather than refusing to run.
-func LoadBudget(statePath string) (policy.BudgetState, error) {
+func LoadBudget(statePath string, workdaysOnly bool) (policy.BudgetState, error) {
 	st, err := store.LoadState(statePath)
 	if err != nil {
 		return policy.BudgetState{}, err
@@ -107,12 +123,28 @@ func LoadBudget(statePath string) (policy.BudgetState, error) {
 	if err := json.Unmarshal(st.Budget, &b); err != nil {
 		return policy.BudgetState{}, fmt.Errorf("budget payload in %s: %w", statePath, err)
 	}
-	// 修訂 2(D6c,2026-11-19):持久化狀態可能早於錨點規則(舊午夜鏈)——
-	// 載入即貼回錨點鐘點,第一輪 Tick 起顯示與結算就和計算一致;只在記憶體
-	// 生效,下次結算落盤時帶出(冪等,重複啟動安全)。日界或錨點缺任一 →
-	// 原樣(無錨點備案鏈、基準無日界防禦皆不變)。
-	if b.DayBoundary != nil && b.WeekAnchorTime != nil {
-		b.DayBoundary = policy.SnapBoundary(time.Now(), b.DayBoundary, b.WeekAnchorTime)
+	// Amendment 2 (D6c, 2026-11-19): persisted state can predate the anchor
+	// rule (the old midnight chain) — snap the boundary to the anchor clock
+	// at load so display and settlement match the calculation from the first
+	// tick; in-memory only, persisted when the next settlement lands
+	// (idempotent, safe across repeated boots). Boundary or anchor missing →
+	// unchanged (the anchorless fallback chain and the baseline-without-
+	// boundary guard stay as they are).
+	// Order-hole fix (2026-11-19 afternoon, user field report: first Save
+	// after a restart drifted to 74.3): the day-start reconstruction MUST use
+	// the ORIGINAL boundary BEFORE the snap — after snapping, boundary−24h is
+	// no longer this budget day's start (it lands on the previous day and the
+	// day count over-counts by one). Legacy files with a baseline but no
+	// DayStartAt get it seeded here; files that already carry the field are
+	// untouched.
+	if b.DayBoundary != nil {
+		if b.DayStartAt == nil && b.DayStartWeekly != nil {
+			ds := b.DayBoundary.Add(-24 * time.Hour)
+			b.DayStartAt = &ds
+		}
+		if b.WeekAnchorTime != nil {
+			b.DayBoundary = policy.SnapBoundary(time.Now(), b.DayBoundary, b.WeekAnchorTime, workdaysOnly)
+		}
 	}
 	return b, nil
 }
@@ -123,4 +155,5 @@ var (
 	_ Switcher     = SwitcherFunc(switcher.Apply)
 	_ QuotaFlipper = QuotaFlipperFunc(quotamode.Flip)
 	_ Notifier     = NotifierFunc(func(title, body string) {})
+	_ WakeNotifier = WakeNotifierFunc(watchers.Spawn)
 )

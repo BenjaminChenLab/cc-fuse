@@ -102,6 +102,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.status())
 	case "/api/switch":
 		s.postSwitch(w, r)
+	case "/api/uilang":
+		s.postUILang(w, r)
 	case "/api/autopilot":
 		s.postAutopilot(w, r)
 	case "/api/import":
@@ -192,6 +194,56 @@ func (s *Server) postSwitch(w http.ResponseWriter, r *http.Request) {
 		Ok     bool   `json:"ok"`
 		Target string `json:"target"`
 	}{Ok: true, Target: req.Target})
+}
+
+// uilangReq is the POST /api/uilang body: the settings-window language the
+// page's #lang button just switched to (2026-11-19 — the choice persists in
+// config.json because localStorage dies with the temporary port).
+type uilangReq struct {
+	Lang string `json:"lang"`
+}
+
+// postUILang validates the language value, hands it to onSave (so it lands
+// in config.json immediately, no Save press needed) and adopts it into the
+// live cell. Only "", "en" and "zh" are accepted; bad JSON, an unknown value
+// or an unwired onSave never touch production state — same conventions as
+// postConfig.
+func (s *Server) postUILang(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var req uilangReq
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "not valid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Lang != "" && req.Lang != "en" && req.Lang != "zh" {
+		http.Error(w, "lang must be empty, en or zh", http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	c := *s.cfg
+	c.UILang = req.Lang
+	s.mu.Unlock()
+	if s.onSave != nil {
+		if err := s.onSave(c); err != nil {
+			http.Error(w, "save failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	s.mu.Lock()
+	s.cfg.UILang = req.Lang
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, struct {
+		Ok   bool   `json:"ok"`
+		Lang string `json:"lang"`
+	}{Ok: true, Lang: req.Lang})
 }
 
 // autopilotReq is the POST /api/autopilot body: the requested autopilot

@@ -1,74 +1,132 @@
 package policy
 
-// 單元測試——2026-11-19 修訂 2(D6a):SnapBoundary 把停滯在歷史鏈的日界貼回
-// 錨點鐘點(今天的錨點鐘點,已過則 +24h),讓「until 前綴/下次結算時刻」等於
-// 計算真正的切截時刻。規格:docs/blueprints/2026-11-19-budget-day-inclusive-fix.md
-// 修訂 2(A9–A11)。宇宙沿用 2026-11-19(週四)使用者實測情境。
+// Unit tests — 2026-11-19 amendment 2 (D6a): SnapBoundary re-derives a stale
+// boundary to the anchor clock (today at the anchor's clock, rolled +24h once
+// past), so the card's until-prefix and the settlement clock equal the calc's
+// cutting time. Spec: docs/blueprints/2026-11-19-budget-day-inclusive-fix.md,
+// amendment 2 + its review-driven refinement (A9–A11, A13). Universe from the
+// 2026-11-19 (Thursday) user field report.
 
 import (
 	"testing"
 	"time"
+
+	"cc-fuse/internal/config"
+	"cc-fuse/internal/domain"
 )
 
 var (
-	snapThuMorning  = time.Date(2026, 11, 19, 12, 21, 0, 0, time.Local) // 週四 12:21(實測當下,錨點鐘點未過)
-	snapThuEvening  = time.Date(2026, 11, 19, 16, 0, 0, 0, time.Local)  // 週四 16:00(已過錨點鐘點)
-	snapFriMidnight = time.Date(2026, 11, 20, 0, 0, 0, 0, time.Local)   // 舊午夜鏈留下的日界
-	snapAnchor      = time.Date(2026, 11, 20, 14, 57, 0, 0, time.Local) // 實測週五 14:57 週重置
+	snapThuMorning  = time.Date(2026, 11, 19, 12, 21, 0, 0, time.Local) // Thu 12:21 (field-report moment, before the anchor clock)
+	snapThuEvening  = time.Date(2026, 11, 19, 16, 0, 0, 0, time.Local)  // Thu 16:00 (past the anchor clock)
+	snapFri1600     = time.Date(2026, 11, 20, 16, 0, 0, 0, time.Local)  // Fri 16:00 (evening, weekend ahead)
+	snapSat1000     = time.Date(2026, 11, 21, 10, 0, 0, 0, time.Local)  // Sat 10:00 (weekend save)
+	snapFriMidnight = time.Date(2026, 11, 20, 0, 0, 0, 0, time.Local)   // the legacy midnight-chain boundary
+	snapAnchor      = time.Date(2026, 11, 20, 14, 57, 0, 0, time.Local) // the observed Fri 14:57 weekly reset
 )
 
-// A9 helper 級:當日錨點鐘點未過 → 貼今天 14:57(不再是停滯的週五 00:00)。
+// f returns a pointer to v — the snapshot builders take pointer fields.
+func f(v float64) *float64 { return &v }
+
+// A9 helper level: the anchor clock has not passed today → snap to today 14:57
+// (no longer the stale Fri 00:00).
 func TestSnapBoundarySameDay(t *testing.T) {
-	got := SnapBoundary(snapThuMorning, &snapFriMidnight, &snapAnchor)
+	got := SnapBoundary(snapThuMorning, &snapFriMidnight, &snapAnchor, true)
 	want := time.Date(2026, 11, 19, 14, 57, 0, 0, time.Local)
 	if got == nil || !got.Equal(want) {
-		t.Fatalf("日界必須貼回當日錨點鐘點 14:57,got %v", got)
+		t.Fatalf("boundary must snap to today's anchor clock 14:57, got %v", got)
 	}
 }
 
-// A10 helper 級:當日錨點鐘點已過 → +24h 貼明天 14:57。
+// A10 helper level: the anchor clock has passed → roll +24h to tomorrow 14:57.
 func TestSnapBoundaryRollsToTomorrow(t *testing.T) {
-	got := SnapBoundary(snapThuEvening, &snapFriMidnight, &snapAnchor)
+	got := SnapBoundary(snapThuEvening, &snapFriMidnight, &snapAnchor, true)
 	want := time.Date(2026, 11, 20, 14, 57, 0, 0, time.Local)
 	if got == nil || !got.Equal(want) {
-		t.Fatalf("已過錨點鐘點必須滾到明天 14:57,got %v", got)
+		t.Fatalf("past the anchor clock must roll to tomorrow 14:57, got %v", got)
 	}
 }
 
-// A11 helper 級:無錨點 → 日界原樣回傳(備案鏈不變)。
+// A11 helper level: no anchor → the boundary is returned unchanged (the
+// fallback chain stays intact).
 func TestSnapBoundaryNilAnchorKeepsBoundary(t *testing.T) {
-	got := SnapBoundary(snapThuMorning, &snapFriMidnight, nil)
+	got := SnapBoundary(snapThuMorning, &snapFriMidnight, nil, true)
 	if got == nil || !got.Equal(snapFriMidnight) {
-		t.Fatalf("無錨點必須原樣回傳日界,got %v", got)
+		t.Fatalf("no anchor must return the boundary unchanged, got %v", got)
 	}
 }
 
-// A13 helper 級:日界缺失 → 回傳 nil,不憑空造日界(K1(d) 精神;修訂 2 補強
-// 把初版的「造瞬間」行為改正)。
+// A13 helper level (review refinement): a missing boundary → return nil,
+// never mint one from nothing (K1(d) spirit; the first draft minted an
+// instant — corrected).
 func TestSnapBoundaryNilBoundaryReturnsNil(t *testing.T) {
-	if got := SnapBoundary(snapThuMorning, nil, &snapAnchor); got != nil {
-		t.Fatalf("日界缺失必須回傳 nil(不得造出日界),got %v", got)
+	if got := SnapBoundary(snapThuMorning, nil, &snapAnchor, true); got != nil {
+		t.Fatalf("missing boundary must return nil (never mint), got %v", got)
 	}
 }
 
-// A13 helper 級:now 恰等於當日錨點鐘點 → 含端點滾 +24h(audit M7 慣例)。
+// A13 helper level: now exactly AT the anchor clock → inclusive +24h roll
+// (audit M7 convention).
 func TestSnapBoundaryAtExactInstantRolls(t *testing.T) {
 	now := time.Date(2026, 11, 19, 14, 57, 0, 0, time.Local)
-	got := SnapBoundary(now, &snapFriMidnight, &snapAnchor)
+	got := SnapBoundary(now, &snapFriMidnight, &snapAnchor, true)
 	want := time.Date(2026, 11, 20, 14, 57, 0, 0, time.Local)
 	if got == nil || !got.Equal(want) {
-		t.Fatalf("恰在錨點鐘點必須滾到明天 14:57,got %v", got)
+		t.Fatalf("exactly at the anchor clock must roll to tomorrow 14:57, got %v", got)
 	}
 }
 
-// A13 helper 級:不同錨點鐘點(09:13)同規則 — 防止對 14:57 的硬編碼蒙混。
-// now 取 08:00(早於 09:13),釘「貼當日鐘點」而非「已過滾明天」的分支。
+// A13 helper level: a different anchor clock (09:13) follows the same rule —
+// guards against a hardcoded 14:57 slipping through. now is 08:00 (before
+// 09:13) to pin the same-day branch, not the roll branch.
 func TestSnapBoundaryDifferentClock(t *testing.T) {
 	anchor0913 := time.Date(2026, 11, 20, 9, 13, 0, 0, time.Local)
 	now := time.Date(2026, 11, 19, 8, 0, 0, 0, time.Local)
-	got := SnapBoundary(now, &snapFriMidnight, &anchor0913)
+	got := SnapBoundary(now, &snapFriMidnight, &anchor0913, true)
 	want := time.Date(2026, 11, 19, 9, 13, 0, 0, time.Local)
 	if got == nil || !got.Equal(want) {
-		t.Fatalf("日界必須貼回當日錨點鐘點 09:13,got %v", got)
+		t.Fatalf("boundary must snap to today's anchor clock 09:13, got %v", got)
+	}
+}
+
+// Amendment 3 (review finding F2): the snap NEVER mints a weekend cut-off —
+// a Fri-evening candidate rolls past Sat/Sun to Mon 14:57 (the Fri→Mon slice
+// merges), and a Saturday save lands Monday too. workdaysOnly=false keeps the
+// calendar behavior (weekend candidates are legal there).
+func TestSnapBoundaryWeekendMerge(t *testing.T) {
+	// Fri 16:00 (after the anchor clock) → Sat would be skipped → Mon 14:57.
+	got := SnapBoundary(snapFri1600, &snapFriMidnight, &snapAnchor, true)
+	want := time.Date(2026, 11, 23, 14, 57, 0, 0, time.Local)
+	if got == nil || !got.Equal(want) {
+		t.Fatalf("Fri evening must snap past the weekend to Mon 14:57, got %v", got)
+	}
+	// Sat 10:00 → Mon 14:57.
+	got = SnapBoundary(snapSat1000, &snapFriMidnight, &snapAnchor, true)
+	if got == nil || !got.Equal(want) {
+		t.Fatalf("Saturday save must snap to Mon 14:57, got %v", got)
+	}
+	// workdaysOnly=false → the weekend candidate is legal (Sat 14:57).
+	got = SnapBoundary(snapSat1000, &snapFriMidnight, &snapAnchor, false)
+	wantSat := time.Date(2026, 11, 21, 14, 57, 0, 0, time.Local)
+	if got == nil || !got.Equal(wantSat) {
+		t.Fatalf("calendar mode must keep the Sat candidate, got %v", got)
+	}
+}
+
+// Self-heal pin (review finding): every settlement envelope must carry
+// DayStartAt = the settlement instant — this is what makes the requirement's
+// "permanent self-heal after the 14:57 settlement" claim real.
+func TestSettleBudgetCarriesDayStartAt(t *testing.T) {
+	in := Input{
+		Now:    snapThuMorning,
+		QuotaB: &domain.QuotaSnapshot{WeeklyPct: f(20), WeeklyReset: &snapAnchor, QueriedAt: snapThuMorning},
+		Budget: BudgetState{},
+		Cfg:    config.Default(),
+	}
+	nb, ok := settleBudget(in)
+	if !ok {
+		t.Fatal("settlement must run with a valid weekly%")
+	}
+	if nb.DayStartAt == nil || !nb.DayStartAt.Equal(snapThuMorning) {
+		t.Fatalf("settlement envelope must carry DayStartAt = the settlement instant, got %v", nb.DayStartAt)
 	}
 }

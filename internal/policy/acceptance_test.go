@@ -385,37 +385,41 @@ func TestAutopilotOff(t *testing.T) {
 	}
 }
 
-// --- 配速數學:七段結算鏈(審計 A1 重寫:驅動真引擎;2026-11-19 D1/D2 改版
+// --- 配速數學:切片結算鏈(2026-11-19 修訂 3 切片語意,使用者以實例定案) ---
 //
-//	重推:天數含重置日 [today, 重置日]、邊界鏈貼錨點鐘點 15:00) ---
+// 乾淨週從週五 16:00 起(剛過週錨 15:00),切片 = 切截鐘點 → 切截鐘點,
+// 週六日的切截跳過結算、其時間併入前一個工作日切片(Fri→Mon 為同一片)。
+// 逐片推導(總量 90、只數工作日切片;錨點採納 B 的重置 = 週五 11-27 15:00):
 //
-// 乾淨週從週五 16:00 起(剛過週錨 15:00),天天燒到天花板,邊界逐日 +24h。
-// 新語意逐段推導(總量 90、只數工作日、含頭含尾;錨點採納 B 的重置=週五
-// 11-27 15:00,故逐日視窗以 11-27 為尾):
+//	day0 週五 16:00:剩餘切片 = day1..day5 = 5 → 90/5   = 18 → 18
+//	    (day1 = 週五午後 → 週一 15:00,週末併入;邊界鏈:五 15:00 → 跳六日 → 一 15:00)
+//	day1 週一 16:00:剩餘 4 片 → (90−18)/4 = 18 → 36
+//	day2 週二 16:00:剩餘 3 片 → (90−36)/3 = 18 → 54
+//	day3 週三 16:00:剩餘 2 片 → (90−54)/2 = 18 → 72
+//	day4 週四 16:00:剩餘 1 片(最後一片領全額)→ (90−72)/1 = 18 → 90
 //
-//	d0 週五 11-20:[五20,五27] 含頭尾工作日 = 五20,一23,二24,三25,四26,五27 = 6
-//	    → 90/6        = 15   → 天花板 15
-//	d1 週六 11-21:[六21,五27] 工作日 = 一~五 = 5 → (90−15)/5  = 15  → 30
-//	d2 週日 11-22:[日22,五27] 工作日 = 一~五 = 5 → (90−30)/5  = 12  → 42
-//	d3 週一 11-23:[一23,五27] 工作日 = 5        → (90−42)/5  = 9.6 → 51.6
-//	d4 週二 11-24:[二24,五27] 工作日 = 4        → (90−51.6)/4 = 9.6 → 61.2
-//	d5 週三 11-25:[三25,五27] 工作日 = 3        → (90−61.2)/3 = 9.6 → 70.8
-//	d6 週四 11-26:[四26,五27] 工作日 = 2        → (90−70.8)/2 = 9.6 → 80.4
-//	(9.6 = 48/5 非二進制精確值 → 全程 1e-9 容差。)
-//
-// 恆等式的新意義(D1):最後一次重置前結算(週四)把餘量對半切——一天用、
-// 一天留給重置日晨間切片;該晨間額度隨週重置作廢 → 尾差 90−80.4 = 9.6
-// = 重置日晨間留量,是刻意不燒完的安全餘裕(不再恰等於總量)。
+// 收敛恆等:末天花板 == 總量 90,零死額度(舊曆日語意的「晨間留量 9.6」
+// 隨切片語意退場——重置日晨間已併入最後一片)。18/36/54/72/90 皆二進制
+// 精確,1e-9 容差為既有慣例。
 func TestPacingIdentitySevenSettlements(t *testing.T) {
-	want := []float64{15, 30, 42, 51.6, 61.2, 70.8, 80.4}
+	want := []float64{18, 36, 54, 72, 90}
+
+	// 五個結算瞬間(切片語意:週六日切截跳過,週末切片併入 day1 → 週末無結算):
+	// Fri 16:00(day1 起點)、Mon/Tue/Wed/Thu 16:00(day2–day5)。
+	nows := []time.Time{
+		fri16,
+		time.Date(2026, 11, 23, 16, 0, 0, 0, time.Local), // Mon
+		time.Date(2026, 11, 24, 16, 0, 0, 0, time.Local), // Tue
+		time.Date(2026, 11, 25, 16, 0, 0, 0, time.Local), // Wed
+		time.Date(2026, 11, 26, 16, 0, 0, 0, time.Local), // Thu
+	}
 
 	budget := policy.BudgetState{
 		WeekAnchorTime: anchorFri15(),
 		DayBoundary:    &fri14, DayStartWeekly: f(0), CeilingToday: f(0),
 	}
-	now := fri16
-	for i, w := range want {
-		// B 的週%=前一日燒到的天花板(燒滿模擬);首日=0。
+	for i, now := range nows {
+		// B 的週%=前一片燒到的天花板(燒滿模擬);首片=0。
 		burned := 0.0
 		if i > 0 {
 			burned = want[i-1]
@@ -430,26 +434,31 @@ func TestPacingIdentitySevenSettlements(t *testing.T) {
 		if d.Budget == nil {
 			t.Fatalf("day %d: settlement must fire (now=%v boundary=%v)", i, now, *budget.DayBoundary)
 		}
-		if got := derefP(d.Budget.CeilingToday); math.Abs(got-w) > 1e-9 {
-			t.Fatalf("day %d: ceiling = %v, want %v (dayStart=%v)", i, got, w, derefP(d.Budget.DayStartWeekly))
+		if got := derefP(d.Budget.CeilingToday); math.Abs(got-want[i]) > 1e-9 {
+			t.Fatalf("day %d: ceiling = %v, want %v (dayStart=%v)", i, got, want[i], derefP(d.Budget.DayStartWeekly))
 		}
 		if got := derefP(d.Budget.CeilingToday); got > 90+1e-9 {
 			t.Fatalf("day %d: cumulative ceiling %v exceeds weekly total", i, got)
 		}
 		budget = *d.Budget
-		now = now.Add(24 * time.Hour)
+		if i == 0 {
+			// Amendment 3 (review F1): the boundary chain must skip the weekend —
+			// day0's next boundary is Mon 15:00, never a Sat/Sun cut-off.
+			wantB := time.Date(2026, 11, 23, 15, 0, 0, 0, time.Local)
+			if budget.DayBoundary == nil || !budget.DayBoundary.Equal(wantB) {
+				t.Fatalf("day0 boundary must skip the weekend to Mon 15:00, got %v", budget.DayBoundary)
+			}
+		}
 	}
-	// 末段恆等(新語意):總量 − 末天花板 = 重置日晨間留量 = 最後一次結算的
-	// 當日配額((90−70.8)/2 = 9.6,餘量對半切的另一半)。
+	// 收敛恆等(修訂 3):最後一片領全額 → 末天花板 == 總量 90,零死額度。
 	last := derefP(budget.CeilingToday)
-	headroom := (90.0 - want[len(want)-2]) / 2.0
-	if math.Abs((90.0-last)-headroom) > 1e-9 {
-		t.Fatalf("identity: 90−last=%v must equal the reset-day-morning headroom %v", 90.0-last, headroom)
+	if math.Abs(last-90.0) > 1e-9 {
+		t.Fatalf("identity: last ceiling %v must equal the full total 90 (no dead budget)", last)
 	}
 }
 
-// 週三結算:基準更新、daysLeft=[三,五] 含重置日=3、邊界貼錨點鐘點(此例 +24h
-// 同值 thu15);恰好卡在邊界時刻也觸發(≥ 含等於,審計 M7)。
+// 週三結算:基準更新、切片語意 days=[三午,四]+[五]=重置 → 2、邊界貼錨點鐘點
+// (此例 +24h 同值 thu15);恰好卡在邊界時刻也觸發(≥ 含等於,審計 M7)。
 func TestSettlementWednesday(t *testing.T) {
 	b := snap("B", f(5), f(30), 0, wed15)
 	budget := policy.BudgetState{WeekAnchorTime: anchorFri15(), DayBoundary: &wed15, DayStartWeekly: f(25.5), CeilingToday: f(50)}
@@ -460,8 +469,8 @@ func TestSettlementWednesday(t *testing.T) {
 	if derefP(d.Budget.DayStartWeekly) != 30.0 {
 		t.Fatalf("new day baseline = current weekly: %v", derefP(d.Budget.DayStartWeekly))
 	}
-	if derefP(d.Budget.CeilingToday) != 50.0 {
-		t.Fatalf("ceiling = 30+(90-30)/3=50([三,四,五] 含重置日 3 個工作日): %v", derefP(d.Budget.CeilingToday))
+	if derefP(d.Budget.CeilingToday) != 60.0 {
+		t.Fatalf("ceiling = 30+(90-30)/2=60(切片語意 [三午,四]、[五]=重置): %v", derefP(d.Budget.CeilingToday))
 	}
 	if !d.Budget.DayBoundary.Equal(thu15) {
 		t.Fatalf("next boundary = +24h: %v want %v", d.Budget.DayBoundary, thu15)
@@ -483,21 +492,22 @@ func TestSettlementNewWeekAfterAnchor(t *testing.T) {
 	if d.Budget == nil {
 		t.Fatalf("weekly reset crossing must settle: %+v", d)
 	}
-	if derefP(d.Budget.CeilingToday) != 15.0 {
-		t.Fatalf("clean week: 90/6=15([五20,五27] 含頭尾 6 個工作日): %v", derefP(d.Budget.CeilingToday))
+	if derefP(d.Budget.CeilingToday) != 18.0 {
+		t.Fatalf("clean week: 90/5=18(切片語意 [五16→五27] 5 個切片,週末併入 day1): %v", derefP(d.Budget.CeilingToday))
 	}
 	if d.Budget.WeekAnchorTime == nil || !d.Budget.WeekAnchorTime.Equal(nextFri) {
 		t.Fatalf("anchor must adopt B's new reset: %v", d.Budget.WeekAnchorTime)
 	}
 }
 
-// 週六結算:假日排除 5 天(一~五)vs 日曆 7 天([六21,五27] 含頭尾,錨點
-// 已過 → 前滾一週至 11-27;審計算術:allowance 14 / 10)。
+// 週六結算:假日排除 5 片(day1 週五午後→週一、day2 一~…~day5)vs 日曆 6 片
+// (週六日各自成片;錨點已過 → 前滾一週至 11-27)。本測試注入的週六日界屬
+// 過渡期遺留形狀(修訂 3 後邊界鏈不再鑄出週末切截);斷言聚焦天花板算術。
+// 算術:allowance 14 / 31.67。
 func TestSettlementWeekendWorkdaysOnly(t *testing.T) {
-	run := func(workdaysOnly bool) policy.Decision {
-		now := sat15.Add(time.Minute)
+	run := func(workdaysOnly bool, now, boundary time.Time) policy.Decision {
 		b := snap("B", f(5), f(20), 0, now)
-		budget := policy.BudgetState{WeekAnchorTime: anchorFri15(), DayBoundary: &sat15, DayStartWeekly: f(20), CeilingToday: f(40)}
+		budget := policy.BudgetState{WeekAnchorTime: anchorFri15(), DayBoundary: &boundary, DayStartWeekly: f(20), CeilingToday: f(40)}
 		cfg := config.Default()
 		cfg.Budget.WorkdaysOnly = workdaysOnly
 		return policy.Evaluate(policy.Input{
@@ -505,12 +515,23 @@ func TestSettlementWeekendWorkdaysOnly(t *testing.T) {
 			Budget: budget, Cfg: cfg, AutopilotOn: true,
 		})
 	}
-	if d := run(true); d.Budget == nil || derefP(d.Budget.CeilingToday) != 34.0 {
-		t.Fatalf("workdays-only: ceiling=20+(70/5)=34: %+v", d.Budget)
+	if d := run(true, sat15.Add(time.Minute), sat15); d.Budget == nil || derefP(d.Budget.CeilingToday) != 34.0 {
+		t.Fatalf("workdays-only: ceiling=20+(70/5)=34(切片語意 5 片,週末併入 day1): %+v", d.Budget)
 	}
-	// 70/7=10 皆二進制可精確表示 → 精確比較。
-	if d := run(false); d.Budget == nil || derefP(d.Budget.CeilingToday) != 30.0 {
-		t.Fatalf("weekends counted: ceiling=20+(70/7)=30: %+v", d.Budget)
+	// 70/6 非二進制精確 → 容差比較(切片語意:日曆模式週六日各自成片 → 6 片)。
+	if d := run(false, sat15.Add(time.Minute), sat15); d.Budget == nil || math.Abs(derefP(d.Budget.CeilingToday)-(20.0+70.0/6.0)) > 1e-9 {
+		t.Fatalf("weekends counted: ceiling=20+(70/6)≈31.67: %+v", d.Budget)
+	}
+	// 審查 F1 殘餘 mutant 的殺手:週末晨間(錨點鐘點未過)處理逾期日界 →
+	// 新日界必須由「錨點分支的週末跳過」鑄出週一 15:00;刪掉該跳過迴圈的
+	// mutant 會鑄出同日 週六 15:00,在此斷言死亡。
+	mon15 := time.Date(2026, 11, 23, 15, 0, 0, 0, time.Local)
+	d := run(true, sat15.Add(-8*time.Hour), fri15) // 週六 07:00,逾期日界 週五 15:00
+	if d.Budget == nil || d.Budget.DayBoundary == nil || !d.Budget.DayBoundary.Equal(mon15) {
+		t.Fatalf("weekend-morning overdue settlement must mint Mon 15:00 (never a weekend cut-off): %+v", d.Budget)
+	}
+	if derefP(d.Budget.CeilingToday) != 34.0 {
+		t.Fatalf("weekend-morning ceiling=20+(70/5)=34: %+v", d.Budget)
 	}
 }
 

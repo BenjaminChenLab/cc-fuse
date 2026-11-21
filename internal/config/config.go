@@ -55,13 +55,43 @@ type Config struct {
 	StaleAfterMin       int    `json:"staleAfterMin"`       // data older than this pauses all decisions (§4)
 	ParseFailAlertLimit int    `json:"parseFailAlertLimit"` // consecutive parse failures before the red-alert toast (§11.8, PD2)
 	QuotaModeFile       string `json:"quotaModeFile"`       // quota-mode.md the writer flips the mode: line in
-	AutoStart           bool   `json:"autoStart"`           // launch at Windows logon (Run registry key)
-	ProxyURL            string `json:"proxyUrl"`            // empty = direct connection (PD1)
+	// WatchersFile is the go-when-racing watcher registry (2026-11-20 wake
+	// notify): after a successful mode flip, its content lines name the parked
+	// sessions the one-shot headless notify targets. JSON-only on purpose —
+	// deliberately no settings-window row (decision 4).
+	WatchersFile string `json:"watchersFile"`
+	// RacingNotify is the wake-notify master switch (2026-11-20): on
+	// (default), every successful mode flip in EITHER direction spawns the
+	// headless notify; off, switching never notifies.
+	RacingNotify bool `json:"racingNotify"`
+	// ResetNotify gates the A-account 429-wall RESET retry notify (2026-11-21
+	// reset-notify): when A is Current and its fresh 5h usage crosses
+	// ResetNotifyAfterPct (the wall line, inclusive), one wall episode is
+	// opened and the existing wake notify fires the third mode "RESET" (a
+	// RETRY order for sessions parked on the wall; it never writes the
+	// quota-mode file) at the quota API's FiveHourReset instant plus
+	// ResetNotifyBufferMin minutes. ResetNotifyMinGapMin is the anti-spam
+	// minimum between two RESET notifies.
+	ResetNotify          bool    `json:"resetNotify"`
+	ResetNotifyAfterPct  float64 `json:"resetNotifyAfterPct"`  // the wall line, inclusive
+	ResetNotifyBufferMin int     `json:"resetNotifyBufferMin"` // minutes after the reset instant
+	ResetNotifyMinGapMin int     `json:"resetNotifyMinGapMin"` // anti-spam gap between RESET notifies
+	AutoStart            bool    `json:"autoStart"`            // launch at Windows logon (Run registry key)
+	ProxyURL             string  `json:"proxyUrl"`             // empty = direct connection (PD1)
+	// UILang pins the settings-window language (2026-11-19): "" (default)
+	// follows the browser language, "en"/"zh" override it. Persisted here —
+	// NOT localStorage — because the settings server binds a temporary port
+	// per window open, and localStorage is keyed by origin (port included),
+	// so a stored choice never survives the next open.
+	UILang string `json:"uilang"`
 }
 
 // Default returns the §9 default table: polling 60/20/80, switch lines 90/90,
 // recovery lines 30/60, warn 80, budget 90/3/workdays-only, staleness 10 min,
-// parse-fail alert after 5 misses, the standard quota-mode.md path, autostart
+// parse-fail alert after 5 misses, the standard quota-mode.md path, the
+// standard watcher registry path with wake notify on (2026-11-20), the RESET
+// retry notify on with wall line 99, buffer 1 min (the user-approved
+// amendment; the skill text says 3) and min-gap 30 min (2026-11-21), autostart
 // on, direct connection, and zero profiles (the user fills A/B in the UI).
 func Default() Config {
 	return Config{
@@ -80,10 +110,16 @@ func Default() Config {
 			WorkdaysOnly:         true,
 			EnforceDailyCeiling:  true,
 		},
-		StaleAfterMin:       10,
-		ParseFailAlertLimit: 5,
-		QuotaModeFile:       `S:/claude-cache/quota-mode.md`,
-		AutoStart:           true,
+		StaleAfterMin:        10,
+		ParseFailAlertLimit:  5,
+		QuotaModeFile:        `S:/claude-cache/quota-mode.md`,
+		WatchersFile:         `S:/claude-cache/go-when-racing/watchers.md`,
+		RacingNotify:         true,
+		ResetNotify:          true,
+		ResetNotifyAfterPct:  99,
+		ResetNotifyBufferMin: 1,
+		ResetNotifyMinGapMin: 30,
+		AutoStart:            true,
 	}
 }
 
@@ -91,7 +127,8 @@ func Default() Config {
 // (cold start). Corrupt JSON → a definite error with a zero Config, the
 // caller decides whether to fall back to defaults. A valid file that omits
 // fields is layered over the defaults, so hand-written partial configs keep
-// sane values for everything the user did not spell out.
+// sane values for everything the user did not spell out; an explicit empty
+// watchersFile heals back to the default (a save artifact, not a choice).
 func Load(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -103,6 +140,16 @@ func Load(path string) (Config, error) {
 	c := Default()
 	if err := json.Unmarshal(data, &c); err != nil {
 		return Config{}, fmt.Errorf("config %s is not valid JSON: %w", path, err)
+	}
+	// An explicit empty watchersFile — what a save from a client that dropped
+	// the field produces (the enforceDailyCeiling zero-value lesson) —
+	// overrides the default during layering; without this heal every later
+	// switch would silently no-op the wake notify (Spawn("") falls through the
+	// missing-file gate). Defense in depth behind the UI's collect()
+	// passthrough. RacingNotify is deliberately NOT healed: an explicit false
+	// is a legitimate user choice, only the empty string is a wipe artifact.
+	if c.WatchersFile == "" {
+		c.WatchersFile = Default().WatchersFile
 	}
 	return c, nil
 }

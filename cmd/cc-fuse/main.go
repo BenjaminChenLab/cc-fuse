@@ -20,6 +20,7 @@ import (
 	"cc-fuse/internal/switcher"
 	"cc-fuse/internal/tray"
 	"cc-fuse/internal/version"
+	"cc-fuse/internal/watchers"
 )
 
 // quotaQueryTimeout is the per-request z.ai quota HTTP timeout (T01: 15s).
@@ -53,7 +54,7 @@ func main() {
 		cfg = config.Default()
 	}
 	statePath := defaultStatePath()
-	budget, err := app.LoadBudget(statePath)
+	budget, err := app.LoadBudget(statePath, cfg.Budget.WorkdaysOnly)
 	if err != nil {
 		logger.Printf("state %s 無法解析,預算重記:%v", statePath, err)
 	}
@@ -65,6 +66,7 @@ func main() {
 		Sw:           app.SwitcherFunc(switcher.Apply),
 		Qm:           app.QuotaFlipperFunc(quotamode.Flip),
 		Not:          notify.Windows{Log: logger},
+		Wake:         app.WakeNotifierFunc(watchers.Spawn),
 		Cfg:          cfg,
 		Profiles:     profiles,
 		StatePath:    statePath,
@@ -74,6 +76,13 @@ func main() {
 		Current:      currentFromSettings(profiles, logger),
 	}
 	loop.SeedBudget(budget)
+	// Boot recompute: a persisted envelope settled by an older binary can
+	// carry a ceiling computed under different rules; mark it dirty so the
+	// first poll recomputes it with the current logic — no manual Save needed.
+	// Cold start (no baseline) is skipped: policy settles it fresh anyway.
+	if budget.DayStartWeekly != nil {
+		loop.MarkBudgetDirty()
+	}
 
 	// 5. 設定窗(127.0.0.1 臨時埠;存檔 = config.Save + 套用自啟 + 熱更新設定)。
 	openSettings := newSettingsOpener(loop, cfgPath, logger)

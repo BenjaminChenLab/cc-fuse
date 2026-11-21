@@ -30,6 +30,12 @@ func TestPageBudgetMarkers(t *testing.T) {
 		`enforceDailyCeiling:document.getElementById("bEnforce").checked`,
 		`noFleeOnWeekend:document.getElementById("noFleeWknd").checked`,
 		`if(st===200)fetchStatus();`,
+		// 2026-11-19 介面語言持久化:按鈕切換 POST /api/uilang 落盤,
+		// 載入時以 /api/config 的 uilang 糾正顯示語言(臨時埠讓 localStorage 失憶)。
+		"api/uilang",  // the toggle's flush-to-config call
+		"c.uilang",    // load-time correction from the server value
+		"uilang:lang", // collect must carry uilang (the main save must not wipe it; zero-value deserialization lesson)
+		"applyServerLang(c.uilang)", // full-expression pin: the correction polarity (a dropped guard reproduces the original bug)
 	} {
 		if !strings.Contains(html, m) {
 			t.Fatalf("indexHTML 缺標記 %q", m)

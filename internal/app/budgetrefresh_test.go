@@ -32,9 +32,10 @@ func TestStatusCarriesCeilingToday(t *testing.T) {
 }
 
 // 存檔(UpdateConfig)→ RefreshBudget() → Status 立刻反映新天花板的數學鏈:
-// 結算於週四 15:00(基準 20、日界週五 00:00、錨週五 15:00;2026-11-19 D1
-// 含頭含尾:天數 = [週四, 週五重置日] = 2 → 天花板 20+(90−20)/2 = 55)
-// → 總量改 50 → 重算 = 20+(50−20)/2 = 35,日界與基準不動。
+// 結算於週四 15:00(基準 20、錨週五 15:00;2026-11-19 修訂 3 切片語意:
+// [四 15:00, 五 15:00 重置) 內無其他切截 → 天數=1,最後一片領全額 →
+// 天花板 20+(90−20)/1 = 90)
+// → 總量改 50 → 重算 = 20+(50−20)/1 = 50,日界與基準不動。
 func TestRefreshBudgetImmediate(t *testing.T) {
 	b := &domain.QuotaSnapshot{
 		ProfileID: "B", FiveHourPct: f(5), WeeklyPct: f(20),
@@ -45,8 +46,8 @@ func TestRefreshBudgetImmediate(t *testing.T) {
 	if r := l.Tick(context.Background(), settleAt); !r.BudgetSaved {
 		t.Fatalf("冷啟結算必須落帳:%+v", r)
 	}
-	if st := l.Status(); st.CeilingToday == nil || *st.CeilingToday != 55 {
-		t.Fatalf("結算後天花板=20+(90−20)/2=55(週四+週五重置日):%+v", st.CeilingToday)
+	if st := l.Status(); st.CeilingToday == nil || *st.CeilingToday != 90 {
+		t.Fatalf("結算後天花板=20+(90−20)/1=90(最後一片領全額):%+v", st.CeilingToday)
 	}
 
 	newCfg := config.Default()
@@ -54,8 +55,8 @@ func TestRefreshBudgetImmediate(t *testing.T) {
 	l.UpdateConfig(newCfg)
 	l.RefreshBudget(settleAt.Add(30 * time.Minute)) // 同預算日內存檔
 
-	if st := l.Status(); st.CeilingToday == nil || *st.CeilingToday != 35 {
-		t.Fatalf("存檔後 Status 必須立刻反映 20+(50−20)/2=35:%+v", st.CeilingToday)
+	if st := l.Status(); st.CeilingToday == nil || *st.CeilingToday != 50 {
+		t.Fatalf("存檔後 Status 必須立刻反映 20+(50−20)/1=50:%+v", st.CeilingToday)
 	}
 }
 
@@ -95,8 +96,8 @@ func TestDirtyLatchRetriesWhenFresh(t *testing.T) {
 	if r := l.Tick(context.Background(), settleAt.Add(time.Minute)); !r.BudgetSaved {
 		t.Fatalf("資料恢復後例行輪必須結算:%+v", r)
 	}
-	if st := l.Status(); st.CeilingToday == nil || *st.CeilingToday != 55 {
-		t.Fatalf("輪詢補算:天花板 55(20+(90−20)/2,D1 含重置日):%+v", st.CeilingToday)
+	if st := l.Status(); st.CeilingToday == nil || *st.CeilingToday != 90 {
+		t.Fatalf("輪詢補算:天花板 90(20+(90−20)/1,切片語意最後一片領全額):%+v", st.CeilingToday)
 	}
 }
 
@@ -145,8 +146,8 @@ func TestStaleRoundKeepsYesterdayCeiling(t *testing.T) {
 	if r := l.Tick(context.Background(), settleAt.Add(time.Minute)); r.BudgetSaved {
 		t.Fatalf("過期輪不得結算:%+v", r)
 	}
-	if st := l.Status(); st.CeilingToday == nil || *st.CeilingToday != 55 {
-		t.Fatalf("過期時昨日天花板必須照舊在場(結算值 55,D1 含重置日):%+v", st.CeilingToday)
+	if st := l.Status(); st.CeilingToday == nil || *st.CeilingToday != 90 {
+		t.Fatalf("過期時昨日天花板必須照舊在場(結算值 90,切片語意領全額):%+v", st.CeilingToday)
 	}
 }
 
