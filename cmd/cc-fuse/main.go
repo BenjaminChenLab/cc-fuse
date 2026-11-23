@@ -54,7 +54,7 @@ func main() {
 		cfg = config.Default()
 	}
 	statePath := defaultStatePath()
-	budget, err := app.LoadBudget(statePath, cfg.Budget.WorkdaysOnly)
+	budget, err := app.LoadBudget(statePath, time.Now(), cfg.Budget.WorkdaysOnly)
 	if err != nil {
 		logger.Printf("state %s 無法解析,預算重記:%v", statePath, err)
 	}

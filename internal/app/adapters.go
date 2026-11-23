@@ -111,7 +111,9 @@ func (p *MonitorPool) client(baseURL string) *monitor.Client {
 // file / no budget payload → zero value, policy settles from current
 // numbers). Corrupt JSON is surfaced for the boot log; the app still starts
 // with a zero budget rather than refusing to run.
-func LoadBudget(statePath string, workdaysOnly bool) (policy.BudgetState, error) {
+// now is the boot instant, injected for deterministic tests (2026-11-23
+// missed-settlement spec D-C; main.go passes time.Now()).
+func LoadBudget(statePath string, now time.Time, workdaysOnly bool) (policy.BudgetState, error) {
 	st, err := store.LoadState(statePath)
 	if err != nil {
 		return policy.BudgetState{}, err
@@ -136,14 +138,17 @@ func LoadBudget(statePath string, workdaysOnly bool) (policy.BudgetState, error)
 	// no longer this budget day's start (it lands on the previous day and the
 	// day count over-counts by one). Legacy files with a baseline but no
 	// DayStartAt get it seeded here; files that already carry the field are
-	// untouched.
+	// untouched. Missed-settlement rule (2026-11-23, spec D-A): SnapBoundary
+	// itself keeps an OVERDUE boundary unchanged — it is the settlement's
+	// trigger and the first Tick settles it; the snap only ever moves a
+	// FUTURE boundary to the anchor clock.
 	if b.DayBoundary != nil {
 		if b.DayStartAt == nil && b.DayStartWeekly != nil {
 			ds := b.DayBoundary.Add(-24 * time.Hour)
 			b.DayStartAt = &ds
 		}
 		if b.WeekAnchorTime != nil {
-			b.DayBoundary = policy.SnapBoundary(time.Now(), b.DayBoundary, b.WeekAnchorTime, workdaysOnly)
+			b.DayBoundary = policy.SnapBoundary(now, b.DayBoundary, b.WeekAnchorTime, workdaysOnly)
 		}
 	}
 	return b, nil

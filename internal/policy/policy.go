@@ -412,10 +412,21 @@ func atClock(t time.Time, ref time.Time) time.Time {
 // boundary unchanged (nil stays nil: the anchorless fallback chain and the
 // baseline-without-boundary guard K1(d) stay as they are — a missing boundary
 // is never minted from nothing).
+// Missed-settlement rule (2026-11-23, spec D-A): a boundary already at or
+// past now is OVERDUE — it is the settlement's trigger, so it is returned
+// unchanged (equality included: the settlement itself fires at the exact
+// instant, audit M7 inclusive). Snapping it forward would swallow the missed
+// settlement and extend the dead day's ceiling (the 2026-11-23 field
+// incident). Only future boundaries are snapped.
 func SnapBoundary(now time.Time, boundary, anchor *time.Time, workdaysOnly bool) *time.Time {
 	if anchor == nil || boundary == nil {
 		// No anchor → keep the legacy fallback boundary as is; no boundary →
 		// return nil, never mint one from nothing (K1(d) spirit).
+		return boundary
+	}
+	// D-A overdue guard: never consume an overdue boundary by snapping — the
+	// settlement consumes it (settlementDue is inclusive at the instant).
+	if !boundary.After(now) {
 		return boundary
 	}
 	b := atClock(now, *anchor)
@@ -460,7 +471,11 @@ func SnapBoundary(now time.Time, boundary, anchor *time.Time, workdaysOnly bool)
 //
 // Guard: a hand-edited state.json can produce baseline-without-boundary
 // (normal writers always set both; re-audit K1(d)) — treated as not
-// computable rather than guessing a ref.
+// computable rather than guessing a ref. Missed-settlement (2026-11-23
+// spec D-B): the recompute path also refuses an OVERDUE DayBoundary
+// (≤ now) — recomputing would re-mint the dead day's ceiling from the
+// stale baseline; the envelope passes through untouched and the Tick's
+// settlement (inclusive at the boundary) is the authoritative update.
 func RefreshBudget(in Input) (BudgetState, bool) {
 	b := in.Budget
 	if b.DayStartWeekly == nil {
@@ -473,6 +488,16 @@ func RefreshBudget(in Input) (BudgetState, bool) {
 		return settleBudget(in)
 	}
 	if b.DayBoundary == nil {
+		return b, false
+	}
+	// D-B missed-settlement guard (2026-11-23): the recompute path counts days
+	// from the persisted DayStartAt — with an OVERDUE boundary that re-mints
+	// the dead day's ceiling from the stale baseline (the incident's second
+	// half). Refuse: return the envelope untouched (ok=false), the Tick's
+	// settlement is the authoritative update (settlementDue fires inclusive at
+	// the overdue instant). The cold branch above is deliberately NOT guarded:
+	// settling IS the settlement.
+	if !b.DayBoundary.After(in.Now) {
 		return b, false
 	}
 	// D6d (2026-11-19): the budget-day start prefers the persisted DayStartAt

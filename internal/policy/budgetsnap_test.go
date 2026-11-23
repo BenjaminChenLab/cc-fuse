@@ -21,6 +21,8 @@ var (
 	snapFri1600     = time.Date(2026, 11, 20, 16, 0, 0, 0, time.Local)  // Fri 16:00 (evening, weekend ahead)
 	snapSat1000     = time.Date(2026, 11, 21, 10, 0, 0, 0, time.Local)  // Sat 10:00 (weekend save)
 	snapFriMidnight = time.Date(2026, 11, 20, 0, 0, 0, 0, time.Local)   // the legacy midnight-chain boundary
+	snapSatMidnight = time.Date(2026, 11, 21, 0, 0, 0, 0, time.Local)   // Sat 00:00 (weekend-chain legacy boundary)
+	snapSunMidnight = time.Date(2026, 11, 22, 0, 0, 0, 0, time.Local)   // Sun 00:00 (weekend-chain legacy boundary)
 	snapAnchor      = time.Date(2026, 11, 20, 14, 57, 0, 0, time.Local) // the observed Fri 14:57 weekly reset
 )
 
@@ -92,20 +94,25 @@ func TestSnapBoundaryDifferentClock(t *testing.T) {
 // a Fri-evening candidate rolls past Sat/Sun to Mon 14:57 (the Fri→Mon slice
 // merges), and a Saturday save lands Monday too. workdaysOnly=false keeps the
 // calendar behavior (weekend candidates are legal there).
+// Missed-settlement amendment (2026-11-23 spec D-E): the property is pinned
+// on FUTURE boundaries only — an overdue boundary is returned unchanged by
+// the D-A guard and consumed by the settlement, never snapped (the incident's
+// exact mechanism: an overdue Fri boundary swallowed by the weekend roll).
 func TestSnapBoundaryWeekendMerge(t *testing.T) {
-	// Fri 16:00 (after the anchor clock) → Sat would be skipped → Mon 14:57.
-	got := SnapBoundary(snapFri1600, &snapFriMidnight, &snapAnchor, true)
+	// Fri 16:00 (after the anchor clock; boundary Sat 00:00 still future) →
+	// Sat would be skipped → Mon 14:57.
+	got := SnapBoundary(snapFri1600, &snapSatMidnight, &snapAnchor, true)
 	want := time.Date(2026, 11, 23, 14, 57, 0, 0, time.Local)
 	if got == nil || !got.Equal(want) {
 		t.Fatalf("Fri evening must snap past the weekend to Mon 14:57, got %v", got)
 	}
-	// Sat 10:00 → Mon 14:57.
-	got = SnapBoundary(snapSat1000, &snapFriMidnight, &snapAnchor, true)
+	// Sat 10:00 (boundary Sun 00:00 still future) → Mon 14:57.
+	got = SnapBoundary(snapSat1000, &snapSunMidnight, &snapAnchor, true)
 	if got == nil || !got.Equal(want) {
 		t.Fatalf("Saturday save must snap to Mon 14:57, got %v", got)
 	}
 	// workdaysOnly=false → the weekend candidate is legal (Sat 14:57).
-	got = SnapBoundary(snapSat1000, &snapFriMidnight, &snapAnchor, false)
+	got = SnapBoundary(snapSat1000, &snapSunMidnight, &snapAnchor, false)
 	wantSat := time.Date(2026, 11, 21, 14, 57, 0, 0, time.Local)
 	if got == nil || !got.Equal(wantSat) {
 		t.Fatalf("calendar mode must keep the Sat candidate, got %v", got)

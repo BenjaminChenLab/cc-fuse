@@ -118,7 +118,8 @@ func TestRefreshBudgetSnapsToAnchorClockNotLiteral(t *testing.T) {
 }
 
 // A11 boot level (D6c): a state.json with no anchor → the boundary unchanged
-// (the fallback chain stays intact).
+// (the fallback chain stays intact). Injected now (missed-settlement spec
+// D-C); the no-anchor path ignores it.
 func TestLoadBudgetKeepsBoundaryWithoutAnchor(t *testing.T) {
 	raw, err := json.Marshal(policy.BudgetState{DayStartWeekly: f(64), DayBoundary: &snapStaleFri})
 	if err != nil {
@@ -129,7 +130,7 @@ func TestLoadBudgetKeepsBoundaryWithoutAnchor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b, err := app.LoadBudget(path, true)
+	b, err := app.LoadBudget(path, snapNow, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +140,8 @@ func TestLoadBudgetKeepsBoundaryWithoutAnchor(t *testing.T) {
 }
 
 // A11 boot level: anchor present, boundary missing → the boundary stays nil
-// (never guessed; K1(d)).
+// (never guessed; K1(d)). Injected now (missed-settlement spec D-C); the
+// missing-boundary path ignores it.
 func TestLoadBudgetKeepsNilBoundaryWithAnchor(t *testing.T) {
 	raw, err := json.Marshal(policy.BudgetState{DayStartWeekly: f(64), WeekAnchorTime: &snapAnchor})
 	if err != nil {
@@ -150,7 +152,7 @@ func TestLoadBudgetKeepsNilBoundaryWithAnchor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b, err := app.LoadBudget(path, true)
+	b, err := app.LoadBudget(path, snapNow, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +201,10 @@ func TestLoadBudgetKeepsExistingDayStart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b, err := app.LoadBudget(path, true)
+	// Injected now (missed-settlement spec D-C): the boot moment Thu 12:00,
+	// before the anchor clock — deterministic, no wall-clock dependence.
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.Local)
+	b, err := app.LoadBudget(path, now, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +214,7 @@ func TestLoadBudgetKeepsExistingDayStart(t *testing.T) {
 	// The snap rule re-applied independently (idempotent within the same day;
 	// rolls once the day's anchor clock has passed, weekends skipped —
 	// rule-derived, not the input echoed back).
-	wantBoundary := wantSnappedBoundary(time.Now())
+	wantBoundary := wantSnappedBoundary(now)
 	if b.DayBoundary == nil || !b.DayBoundary.Equal(wantBoundary) {
 		t.Fatalf("a boundary already on the anchor clock must snap idempotently, want %v got %v", wantBoundary, b.DayBoundary)
 	}
@@ -217,6 +222,7 @@ func TestLoadBudgetKeepsExistingDayStart(t *testing.T) {
 
 // Boot level (review refinement 2a): no baseline (never settled) → no
 // day-start seeding (the cold path is written whole by the settlement).
+// Injected now (missed-settlement spec D-C); the seeding gate ignores it.
 func TestLoadBudgetNoBaselineNoDayStart(t *testing.T) {
 	raw, err := json.Marshal(policy.BudgetState{DayBoundary: &snapStaleFri, WeekAnchorTime: &snapAnchor})
 	if err != nil {
@@ -227,7 +233,7 @@ func TestLoadBudgetNoBaselineNoDayStart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b, err := app.LoadBudget(path, true)
+	b, err := app.LoadBudget(path, snapNow, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +261,10 @@ func TestLoadBudgetSeedsDayStartBeforeSnap(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b, err := app.LoadBudget(path, true)
+	// Injected now (missed-settlement spec D-C): the boot moment Thu 12:21
+	// (the file's field-report moment), boundary and chain tail share it.
+	now := snapNow
+	b, err := app.LoadBudget(path, now, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +272,6 @@ func TestLoadBudgetSeedsDayStartBeforeSnap(t *testing.T) {
 	if b.DayStartAt == nil || !b.DayStartAt.Equal(wantStart) {
 		t.Fatalf("load must seed the day start Thu 00:00 BEFORE snapping, got %v", b.DayStartAt)
 	}
-	now := time.Now()
 	wantBoundary := wantSnappedBoundary(now)
 	if b.DayBoundary == nil || !b.DayBoundary.Equal(wantBoundary) {
 		t.Fatalf("the boundary must still snap to the anchor clock, want %v got %v", wantBoundary, b.DayBoundary)
@@ -272,7 +280,7 @@ func TestLoadBudgetSeedsDayStartBeforeSnap(t *testing.T) {
 	// Chain tail: the first save recomputed from this loaded state must land
 	// 79.5 (64+31/2), never the Wednesday-derived 74.3.
 	nb, ok := policy.RefreshBudget(policy.Input{
-		Now: time.Now(), Budget: b,
+		Now: now, Budget: b,
 		Cfg: func() config.Config {
 			cfg := config.Default()
 			cfg.Budget.WeeklyTotalPct = 95
@@ -281,6 +289,61 @@ func TestLoadBudgetSeedsDayStartBeforeSnap(t *testing.T) {
 	})
 	if !ok || nb.CeilingToday == nil || *nb.CeilingToday != 79.5 {
 		t.Fatalf("the first save must recompute 79.5 (no drift), ok=%v got %v", ok, nb.CeilingToday)
+	}
+}
+
+// Missed-settlement unit (2026-11-23 spec D-A/D-B, boot level): a LEGACY
+// file (baseline set, no DayStartAt) whose boundary is already overdue at
+// boot — the day start must still seed from the ORIGINAL boundary (the
+// order-hole rule is orthogonal to the overdue guard), the boundary must
+// stay overdue (the settlement trigger), and the boot dirty recompute must
+// refuse the dead day (ok=false), leaving the first Tick's settlement as the
+// authoritative update.
+func TestLoadBudgetOverdueLegacySeedsDayStartThenRecomputeRefuses(t *testing.T) {
+	overdueBoundary := time.Date(2026, 11, 23, 14, 57, 0, 0, time.Local) // Mon, overdue at boot
+	raw, err := json.Marshal(policy.BudgetState{
+		DayStartWeekly: f(64), DayBoundary: &overdueBoundary,
+		WeekAnchorTime: &snapAnchor, CeilingToday: f(95),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := store.SaveState(path, store.State{Budget: raw}); err != nil {
+		t.Fatal(err)
+	}
+
+	bootNow := time.Date(2026, 11, 23, 16, 37, 0, 0, time.Local) // Mon evening boot
+	b, err := app.LoadBudget(path, bootNow, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.DayBoundary == nil || !b.DayBoundary.Equal(overdueBoundary) {
+		t.Fatalf("an overdue boundary must stay Mon 14:57 (the settlement trigger), got %v", b.DayBoundary)
+	}
+	wantStart := time.Date(2026, 11, 22, 14, 57, 0, 0, time.Local) // seeded from the ORIGINAL boundary − 24h
+	if b.DayStartAt == nil || !b.DayStartAt.Equal(wantStart) {
+		t.Fatalf("the legacy file must still seed the day start from the original boundary, got %v", b.DayStartAt)
+	}
+
+	// Chain tail: the boot dirty recompute must refuse the dead day (spec D-B)
+	// — the envelope passes through untouched for the Tick settlement.
+	nb, ok := policy.RefreshBudget(policy.Input{
+		Now: bootNow, Budget: b,
+		Cfg: func() config.Config {
+			cfg := config.Default()
+			cfg.Budget.WeeklyTotalPct = 95
+			return cfg
+		}(),
+	})
+	if ok {
+		t.Fatalf("the boot recompute must refuse an overdue boundary (ok=false expected)")
+	}
+	if nb.CeilingToday == nil || *nb.CeilingToday != 95 {
+		t.Fatalf("the envelope must pass through untouched, ceiling %v", nb.CeilingToday)
+	}
+	if nb.DayBoundary == nil || !nb.DayBoundary.Equal(overdueBoundary) {
+		t.Fatalf("the refused recompute must keep the overdue boundary, got %v", nb.DayBoundary)
 	}
 }
 
