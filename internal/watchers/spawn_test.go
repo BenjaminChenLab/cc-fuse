@@ -9,13 +9,19 @@ package watchers
 //
 // The two prompt constants below are INDEPENDENT transcriptions of the
 // authority blocks in C:\Users\Benjamin\.claude\skills\go-when-racing\SKILL.md
-// (section "The watcher registry & the cc-fuse notify", RACING block L102-115,
-// SAVING block L121-133), NOT copies of the production constants — the
-// spawn-argument assertions compare production output against them, so a
-// prompt edited anywhere breaks the test. Byte identity against the authority
-// file is additionally verified by the scratch audit tool
-// (B:\claude-temp\racing-wake-notify-audit\main.go). Trailing-newline
-// convention: the block ends at its last line, no trailing newline.
+// (section "The watcher registry & the cc-fuse notify", RACING block and
+// SAVING block), NOT copies of the production constants — the spawn-argument
+// assertions compare production output against them, so a prompt edited
+// anywhere breaks the test. The byte-identity audit scratch tool that used
+// to live on the B: RAM disk is gone with a reboot — these transcriptions
+// are the standing enforcement. Trailing-newline convention: the block ends
+// at its last line, no trailing newline.
+//
+// 2026-11-25 hardening: the spawned prompt must be the verbatim base PLUS the
+// embedded registry snapshot (exact delimiters), and the command must carry
+// --add-dir <registry parent dir> — both pinned in assertSpawnShape; the
+// prompt's step-1 broadcast fallback (registry unreadable → never exit
+// silently) is part of the verbatim block.
 
 import (
 	"os"
@@ -35,7 +41,12 @@ const createNoWindow = 0x08000000
 // testRacingPrompt is the verbatim RACING notify prompt (authority: SKILL.md
 // RACING block). Backticks are concatenated so the raw string stays verbatim.
 const testRacingPrompt = `📨 quota-mode notify — flip TO RACING (spawned by cc-fuse after an account switch) — one job, then exit.
-1. Read S:/claude-cache/go-when-racing/watchers.md. Missing or no lines → exit silently.
+1. Registry = the watchers.md snapshot embedded at the END of this prompt (spawn-time copy by
+   cc-fuse). A live re-read of S:/claude-cache/go-when-racing/watchers.md is also allowed
+   (--add-dir grant on the registry dir) and a successful re-read wins over the snapshot;
+   that winning content is missing/empty/no lines → exit silently. If NO embedded snapshot
+   is present AND the live re-read fails on permissions → do NOT exit silently: treat every
+   line as ` + "`" + `session: unknown` + "`" + `, run step 4's single self-filtering broadcast, then exit.
 2. ToolSearch select:ListAgents,SendMessage; ListAgents once.
 3. For each line whose session name appears in ListAgents → SendMessage (fire-and-forget):
    「quota mode 已翻成 RACING — 你的 go-when-racing chain <chain path> 觸發條件已成立:立刻
@@ -52,7 +63,12 @@ const testRacingPrompt = `📨 quota-mode notify — flip TO RACING (spawned by 
 // testSavingPrompt is the verbatim SAVING notify prompt (authority: SKILL.md
 // SAVING block).
 const testSavingPrompt = `📨 quota-mode notify — flip TO SAVING (spawned by cc-fuse after an account switch) — one job, then exit.
-1. Read S:/claude-cache/go-when-racing/watchers.md. Missing or no lines → exit silently.
+1. Registry = the watchers.md snapshot embedded at the END of this prompt (spawn-time copy by
+   cc-fuse). A live re-read of S:/claude-cache/go-when-racing/watchers.md is also allowed
+   (--add-dir grant on the registry dir) and a successful re-read wins over the snapshot;
+   that winning content is missing/empty/no lines → exit silently. If NO embedded snapshot
+   is present AND the live re-read fails on permissions → do NOT exit silently: treat every
+   line as ` + "`" + `session: unknown` + "`" + `, run step 4's single self-filtering broadcast, then exit.
 2. ToolSearch select:ListAgents,SendMessage; ListAgents once.
 3. For each line whose session name appears in ListAgents → SendMessage (fire-and-forget):
    「quota mode 已翻回 SAVING — 若你正在執行 go-when-racing chain <chain path> 的 brief,
@@ -116,8 +132,10 @@ func TestSpawnRacingVerbatim(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-must-not-leak")
 	t.Setenv("ANTHROPIC_BASE_URL", "https://previous-account.example")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "leak-canary")
+	t.Setenv("ANTHROPIC_MODEL", "leak-canary-2") // a 4th ANTHROPIC_* name: kills any strip narrowed to a hardcoded trio
 	t.Setenv("FAKE_CANARY", "kept")
-	registry := writeRegistry(t, "10:00 | chain: S:/x/a.md | session: alpha\r\n11:00 | chain: S:/x/b.md | session: unknown\r\n")
+	registryContent := "10:00 | chain: S:/x/a.md | session: alpha\r\n11:00 | chain: S:/x/b.md | session: unknown\r\n"
+	registry := writeRegistry(t, registryContent)
 
 	if err := Spawn(registry, "RACING"); err != nil {
 		t.Fatalf("Spawn: %v", err)
@@ -125,7 +143,7 @@ func TestSpawnRacingVerbatim(t *testing.T) {
 	if n := len(*sc); n != 1 {
 		t.Fatalf("a multi-line registry spawns exactly once, got %d", n)
 	}
-	assertSpawnShape(t, (*sc)[0], testRacingPrompt, home)
+	assertSpawnShape(t, (*sc)[0], testRacingPrompt, registryContent, filepath.Dir(registry), home)
 }
 
 // TestSpawnSavingVerbatim: the same spawn contract with the SAVING direction
@@ -137,8 +155,10 @@ func TestSpawnSavingVerbatim(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-must-not-leak")
 	t.Setenv("ANTHROPIC_BASE_URL", "https://previous-account.example")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "leak-canary")
+	t.Setenv("ANTHROPIC_MODEL", "leak-canary-2") // a 4th ANTHROPIC_* name: kills any strip narrowed to a hardcoded trio
 	t.Setenv("FAKE_CANARY", "kept")
-	registry := writeRegistry(t, "10:00 | chain: S:/x/a.md | session: alpha\r\n")
+	registryContent := "10:00 | chain: S:/x/a.md | session: alpha\r\n"
+	registry := writeRegistry(t, registryContent)
 
 	if err := Spawn(registry, "SAVING"); err != nil {
 		t.Fatalf("Spawn: %v", err)
@@ -146,7 +166,7 @@ func TestSpawnSavingVerbatim(t *testing.T) {
 	if n := len(*sc); n != 1 {
 		t.Fatalf("a registry with content spawns exactly once, got %d", n)
 	}
-	assertSpawnShape(t, (*sc)[0], testSavingPrompt, home)
+	assertSpawnShape(t, (*sc)[0], testSavingPrompt, registryContent, filepath.Dir(registry), home)
 }
 
 // TestSpawnExeFallback: with claude absent from PATH, the exe falls back to
@@ -226,20 +246,32 @@ func TestSpawnLookPathPreferred(t *testing.T) {
 }
 
 // assertSpawnShape pins the decided spawn mechanics on the captured command:
-// a resolved exe, args [exe -p prompt] with the verbatim prompt, an
-// explicitly built env stripped of every ANHROPIC_* entry (never nil — a nil
-// env means inherit and would silently keep the old account), the user-home
-// working dir, and the windowless CREATE_NO_WINDOW attributes.
-func assertSpawnShape(t *testing.T, cmd *exec.Cmd, wantPrompt, home string) {
+// a resolved exe, args [exe -p prompt --add-dir <registry parent dir>] where
+// the prompt is the verbatim base prompt PLUS the embedded registry snapshot
+// (exact delimiters — 2026-11-25 hardening: the windowless child could never
+// be granted S:\ interactively, so the prompt carries the content itself and
+// --add-dir is the live re-read grant), an explicitly built env stripped of
+// every ANHROPIC_* entry (never nil — a nil env means inherit and would
+// silently keep the old account), the user-home working dir, and the
+// windowless CREATE_NO_WINDOW attributes.
+func assertSpawnShape(t *testing.T, cmd *exec.Cmd, wantPrompt, wantRegistryContent, wantAddDir, home string) {
 	t.Helper()
 	if cmd.Path == "" {
 		t.Fatalf("claude exe must be resolved (LookPath or the USERPROFILE fallback), got empty Path")
 	}
-	if len(cmd.Args) != 3 || cmd.Args[1] != "-p" {
-		t.Fatalf("args must be [exe -p prompt], got %q", cmd.Args)
+	if len(cmd.Args) != 5 || cmd.Args[1] != "-p" {
+		t.Fatalf("args must be [exe -p prompt --add-dir <registry dir>], got %q", cmd.Args)
 	}
-	if cmd.Args[2] != wantPrompt {
-		t.Fatalf("prompt not verbatim (direction or text drift):\n got %q\nwant %q", cmd.Args[2], wantPrompt)
+	wantFull := wantPrompt + "\n\n--- go-when-racing watchers.md registry (embedded at spawn by cc-fuse) ---\n" +
+		wantRegistryContent + "\n--- end of registry ---"
+	if cmd.Args[2] != wantFull {
+		t.Fatalf("prompt must be the verbatim base plus the embedded registry snapshot (direction or text drift):\n got %q\nwant %q", cmd.Args[2], wantFull)
+	}
+	if cmd.Args[3] != "--add-dir" {
+		t.Fatalf("args[3] must be --add-dir, got %q", cmd.Args[3])
+	}
+	if cmd.Args[4] != wantAddDir {
+		t.Fatalf("add-dir must be the registry's parent dir (self-configuring grant):\n got %q\nwant %q", cmd.Args[4], wantAddDir)
 	}
 	if cmd.Env == nil {
 		t.Fatalf("child env must be explicitly built (stripped), not inherited (nil Env)")
@@ -295,4 +327,78 @@ func writeRegistry(t *testing.T, content string) string {
 		t.Fatalf("write registry: %v", err)
 	}
 	return path
+}
+
+// TestPromptAuthorityMirror (2026-11-25): the standing enforcement the RAM-disk
+// scratch audit tool used to provide. When the authority skill file exists on
+// this machine, its three fenced notify-prompt blocks must be byte-identical
+// (LF-normalized; Go raw strings drop \r) to the production consts — a
+// single-side edit on either side turns this red. Machines without the file
+// (CI) skip: the authority file deliberately stays out of the repo, so the
+// impl↔test transcription edge stays the only mechanically forced one there.
+func TestPromptAuthorityMirror(t *testing.T) {
+	const authorityPath = `C:\Users\Benjamin\.claude\skills\go-when-racing\SKILL.md`
+	data, err := os.ReadFile(authorityPath)
+	if err != nil {
+		t.Skipf("authority skill file not present on this machine, mirror check skipped: %v", err)
+	}
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+
+	want := map[string]string{
+		"flip TO RACING":   racingNotifyPrompt,
+		"flip TO SAVING":   savingNotifyPrompt,
+		"429 wall CLEARED": resetNotifyPrompt,
+	}
+	found := map[string]bool{}
+	for _, block := range fencedNotifyBlocks(text) {
+		matched := false
+		for key, constText := range want {
+			if strings.Contains(block, key) {
+				found[key] = true
+				matched = true
+				if block != constText {
+					t.Fatalf("authority block %q drifted from the Go const:\nAUTHORITY:\n%s\nCONST:\n%s", key, block, constText)
+				}
+				break
+			}
+		}
+		if !matched {
+			t.Fatalf("a fenced block carries the notify marker but matches no known direction header: %q", block)
+		}
+	}
+	for key := range want {
+		if !found[key] {
+			t.Fatalf("authority skill file has no notify block for %q — the skill-side blocks were restructured?", key)
+		}
+	}
+}
+
+// fencedNotifyBlocks returns the body of every ```-fenced block carrying the
+// notify-marker text (the skill file's poll-guard and registry-example fences
+// do not carry it and are filtered out).
+func fencedNotifyBlocks(text string) []string {
+	var blocks []string
+	lines := strings.Split(text, "\n")
+	for i := 0; i < len(lines); {
+		if strings.TrimSpace(lines[i]) != "```" {
+			i++
+			continue
+		}
+		end := -1
+		for j := i + 1; j < len(lines); j++ {
+			if strings.TrimSpace(lines[j]) == "```" {
+				end = j
+				break
+			}
+		}
+		if end < 0 {
+			break // unterminated fence: trailing prose, nothing more to extract
+		}
+		body := strings.Join(lines[i+1:end], "\n")
+		if strings.Contains(body, "quota-mode notify") {
+			blocks = append(blocks, body)
+		}
+		i = end + 1
+	}
+	return blocks
 }

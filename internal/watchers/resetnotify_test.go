@@ -10,11 +10,12 @@ package watchers
 //
 // testResetPrompt is an INDEPENDENT transcription of the authority block in
 // C:\Users\Benjamin\.claude\skills\go-when-racing\SKILL.md (RESET notify
-// prompt, L141-152), NOT a copy of the production constant — the spawn-
-// argument assertion compares production output against it, so a prompt
-// edited anywhere breaks the test. Trailing-newline convention: the block
-// ends at its last line, no trailing newline. Backticks are concatenated so
-// the raw string stays verbatim.
+// prompt), NOT a copy of the production constant — the spawn-argument
+// assertion compares production output against it, so a prompt edited
+// anywhere breaks the test. Trailing-newline convention: the block ends at
+// its last line, no trailing newline. Backticks are concatenated so the raw
+// string stays verbatim. The 2026-11-25 embedded-snapshot and --add-dir pins
+// live in spawn_test.go's assertSpawnShape, shared with this file.
 
 import (
 	"os"
@@ -23,7 +24,12 @@ import (
 )
 
 const testResetPrompt = `📨 quota-mode notify — A-account 429 wall CLEARED (5h reset, spawned by cc-fuse; NO mode flip happened) — one job, then exit.
-1. Read S:/claude-cache/go-when-racing/watchers.md. Missing or no lines → exit silently.
+1. Registry = the watchers.md snapshot embedded at the END of this prompt (spawn-time copy by
+   cc-fuse). A live re-read of S:/claude-cache/go-when-racing/watchers.md is also allowed
+   (--add-dir grant on the registry dir) and a successful re-read wins over the snapshot;
+   that winning content is missing/empty/no lines → exit silently. If NO embedded snapshot
+   is present AND the live re-read fails on permissions → do NOT exit silently: treat every
+   line as ` + "`" + `session: unknown` + "`" + `, run step 4's single self-filtering broadcast, then exit.
 2. ToolSearch select:ListAgents,SendMessage; ListAgents once.
 3. For each line whose session name appears in ListAgents → SendMessage (fire-and-forget):
    「A 帳號的 429 牆已過 5 小時重置 — 若你有因 429/usage limit 停下的工作,立即原地 retry 續做
@@ -45,8 +51,10 @@ func TestSpawnResetVerbatim(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-must-not-leak")
 	t.Setenv("ANTHROPIC_BASE_URL", "https://previous-account.example")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "leak-canary")
+	t.Setenv("ANTHROPIC_MODEL", "leak-canary-2") // a 4th ANTHROPIC_* name: kills any strip narrowed to a hardcoded trio
 	t.Setenv("FAKE_CANARY", "kept")
-	registry := writeRegistry(t, "10:00 | chain: S:/x/a.md | session: alpha\r\n11:00 | chain: S:/x/b.md | session: unknown\r\n")
+	registryContent := "10:00 | chain: S:/x/a.md | session: alpha\r\n11:00 | chain: S:/x/b.md | session: unknown\r\n"
+	registry := writeRegistry(t, registryContent)
 
 	if err := Spawn(registry, "RESET"); err != nil {
 		t.Fatalf("Spawn: %v", err)
@@ -54,7 +62,7 @@ func TestSpawnResetVerbatim(t *testing.T) {
 	if n := len(*sc); n != 1 {
 		t.Fatalf("a multi-line registry spawns exactly once, got %d", n)
 	}
-	assertSpawnShape(t, (*sc)[0], testResetPrompt, home)
+	assertSpawnShape(t, (*sc)[0], testResetPrompt, registryContent, filepath.Dir(registry), home)
 }
 
 // TestSpawnResetGate: RESET walks the same cost gates as the flip modes —

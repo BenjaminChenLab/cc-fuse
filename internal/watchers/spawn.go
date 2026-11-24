@@ -110,7 +110,18 @@ func Spawn(watchersFile, mode string) error {
 	// (= the account just switched to — the skill's explicit design);
 	// HideWindow + CREATE_NO_WINDOW (0x08000000) so the windowsgui tray never
 	// flashes a console window while the child runs.
-	cmd := exec.Command(exe, "-p", prompt)
+	//
+	// 2026-11-25 hardening (field evidence: the 19:57 SAVING notify died on
+	// the child's sandbox wall — its readable world is the startup cwd only,
+	// and a windowless session can never be granted S:\ interactively, so the
+	// registry went unread and no session was told to stop). Two layers: the
+	// registry snapshot Spawn already holds from the cost gate is embedded
+	// into the prompt, and --add-dir grants the registry's parent dir so a
+	// live re-read is possible; the prompt's step-1 fallback (broadcast when
+	// both fail) is the third layer. The grant is derived from the passed
+	// path, so a customized watchersFile location configures itself.
+	addDir := filepath.Dir(watchersFile)
+	cmd := exec.Command(exe, "-p", embedRegistry(prompt, data), "--add-dir", addDir)
 	cmd.Env = stripAnthropic(os.Environ())
 	cmd.Dir = home
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
