@@ -2,6 +2,13 @@
 
 格式參考 Keep a Changelog,版本語意化;每個版本對應一個 git tag(`v<版本>`)。
 
+## [0.4.2] - 2026-11-25
+
+### 修復
+
+- **SAVING 停手通知不再死在沙箱**:翻檔後派出的 headless 通知 session,可讀範圍只有自己的啟動目錄(C:\Users\Benjamin),讀不到 S:\ 上的名冊也沒有人能批准授權 — 現場實例(2026-11-24 19:57):通知 session 照提示詞字面靜默退出,正在執行的 go-when-racing chain 沒收到停手令,在付費帳號上多跑約 23 分鐘。三層修法:名冊快照直接內嵌進提示詞、spawn 加 `--add-dir` 授權名冊父目錄(路徑自參數推導)、提示詞明寫「兩層皆失效不得靜默退出,改走全機自我過濾廣播」(把兩個通知 session 當場隨機救場的作法升級為合約義務)。配套:新增權威檔鏡射審計測試(接回 RAM-disk 舊審計工具職責)、三支 verbatim 測試補第四個 `ANTHROPIC_*` 金絲雀(擋縮窄式剝除回歸)。
+- 規格與測試:`docs/blueprints/2026-11-25-wake-notify-sandbox-hardening.md`(spec-tdd-lite:retroactive-RED 實證、fresh-context 審查 8 項發現 2 修 6 記錄、全套 12 套件綠)。
+
 ## [0.4.1] - 2026-11-23
 
 ### 修復
